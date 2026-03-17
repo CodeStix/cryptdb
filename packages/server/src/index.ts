@@ -15,12 +15,12 @@ class CryptServer {
         });
     }
 
-    async parseBodyJsonValidated<T extends z.ZodType>(req: http.IncomingMessage, schema: T): Promise<z.infer<T>> {
+    private async parseBodyJsonValidated<T extends z.ZodType>(req: http.IncomingMessage, schema: T): Promise<z.infer<T>> {
         const json = await this.parseBodyJson(req);
         return await schema.parseAsync(json);
     }
 
-    async parseBodyJson(req: http.IncomingMessage) {
+    private async parseBodyJson(req: http.IncomingMessage) {
         const contentType = req.headers["content-type"] || "";
         if (!contentType.startsWith("application/json")) {
             throw new Error("Unsupported Content-Type");
@@ -60,7 +60,7 @@ class CryptServer {
         });
     }
 
-    async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+    private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         console.log("Req", req.url);
 
         try {
@@ -74,13 +74,13 @@ class CryptServer {
         }
     }
 
-    ensureHttpMethod(req: http.IncomingMessage, method: string) {
+    private ensureHttpMethod(req: http.IncomingMessage, method: string) {
         if (req.method !== method) {
             throw new Error("Unsupported HTTP method");
         }
     }
 
-    async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse) {
+    private async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse) {
         switch (url.pathname) {
             case "/login": {
                 this.ensureHttpMethod(req, "POST");

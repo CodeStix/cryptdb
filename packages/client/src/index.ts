@@ -1,5 +1,6 @@
 import z from "zod";
 import { LoginRequestSchema } from "./types";
+import { deriveKey, encodeBase64, keyToBuffer, textToBytes } from "./crypto";
 
 export * from "./types";
 
@@ -36,6 +37,16 @@ export class CryptClient {
     async login(userName: string) {
         const res = await this.fetchJson<z.infer<typeof LoginRequestSchema>, { user: string }>("POST", "/login", { userName });
 
+        const salt = new Uint8Array(32);
+        salt.fill(124);
+        // crypto.getRandomValues(salt);
+
+        console.time("derivedKey");
+        const derivedKey = await keyToBuffer(await deriveKey(textToBytes(res.user), salt));
+        console.timeEnd("derivedKey");
+
+        console.log("salt", encodeBase64(salt));
+        console.log("key", encodeBase64(derivedKey), derivedKey.length);
         console.log("Login:", res);
     }
 }
