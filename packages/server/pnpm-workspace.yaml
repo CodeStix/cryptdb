@@ -1,0 +1,2 @@
+overrides:
+  cryptdb-client: link:../../../../.local/share/pnpm/global/5/node_modules/cryptdb-client
