@@ -1,0 +1,189 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "prisma"
+  moduleFormat        = "cjs"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// INSERT INTO "TableDescriptor"("tableName","description") VALUES('Profile','{}');
+// INSERT INTO "TablePermission"("tableName", "groupId", "canDelete", "canInsert", "canQuery", "canRead", "canUpdate") VALUES('Profile', 2, true, true, true, true, true);
+
+model User {
+  id                   BigInt     @id @default(autoincrement())
+  userName             String     @unique
+  personalGroup        Group      @relation(fields: [personalGroupId], references: [id])
+  personalGroupId      BigInt     @unique
+  personalCollection   Collection @relation(fields: [personalCollectionId], references: [id])
+  personalCollectionId BigInt     @unique
+  // admin       Boolean @default(false) // Admins are allowed to create new object types
+
+  // authKey: Deviced from the master user password. authKey = pwhash(password, authSalt)
+  authSalt      Bytes
+  authHashedKey Bytes // Used to verify user. authHashedKey = crypto_generichash(authKey)
+
+  // encryptionKey: Derived from the master user password. encryptionKey = pwhash(password, encryptionSalt)
+  encryptionSalt Bytes
+
+  publicKey                Bytes
+  encryptedPrivateKey      Bytes // Encrypted with encryptionKey, which is derived from the master user password
+  encryptedPrivateKeyNonce Bytes
+
+  groups GroupUser[]
+}
+
+model GroupUser {
+  userId  BigInt
+  user    User   @relation(fields: [userId], references: [id])
+  groupId BigInt
+  group   Group  @relation(fields: [groupId], references: [id])
+
+  role                     GroupRole
+  encryptedGroupPrivateKey Bytes // Encrypted using User public key
+  // encryptedGroupPrivateKeyNonce Bytes 
+
+  @@id([userId, groupId])
+}
+
+enum GroupRole {
+  Reader
+  Moderator // Can add/remove users to the group, but not moderators
+  Admin // Can add/remove users, including moderators and delete the group
+}
+
+model Group {
+  id BigInt @id @default(autoincrement())
+
+  personalUser User? @relation()
+
+  name      String
+  publicKey Bytes
+  // privateKey: stored in GroupUserPermission
+
+  canCreateCollections Boolean @default(false)
+
+  users       GroupUser[]
+  collections GroupCollection[]
+  permissions TablePermission[]
+}
+
+model GroupCollection {
+  groupId      BigInt
+  group        Group      @relation(fields: [groupId], references: [id])
+  collectionId BigInt
+  collection   Collection @relation(fields: [collectionId], references: [id])
+
+  encryptedCollectionPrivateKey Bytes? // If key isn't shared, only objects can be added to this collection
+  // encryptedUsingKeyVersion      Int
+
+  canAdd      Boolean // Can add objects to this collection
+  canRemove   Boolean // Can remove objects from this collection
+  canWrite    Boolean // Can update objects in this collection
+  // canRead     Boolean // Can read objects in this collection
+  // canQuery    Boolean // Can query objects from this collection
+  canShare    Boolean @default(true) // Can share objects from this collection
+  canModerate Boolean // Can add/remove groups/users from this collection and adjust permissions
+  // readFields  String[]
+  // writeFields String[]
+
+  @@id([groupId, collectionId])
+}
+
+model Collection {
+  id      BigInt             @id @default(autoincrement())
+  groups  GroupCollection[]
+  objects CollectionObject[]
+
+  name      String
+  publicKey Bytes
+  // privateKey: stored in GroupCollection
+
+  personalUser User? @relation()
+}
+
+model CollectionObject {
+  collectionId BigInt
+  collection   Collection @relation(fields: [collectionId], references: [id])
+  objectId     BigInt
+  object       Object     @relation(fields: [objectId], references: [id])
+
+  encryptedObjectKey Bytes // Encrypted using Collection public key
+
+  // encryptedUsingKeyVersion Int
+  // encryptedObjectKeyNonce Bytes
+  // encryptedColumnKeys Json // Encrypted
+
+  @@id([collectionId, objectId])
+  @@index([collectionId])
+}
+
+model Object {
+  id         BigInt          @id @default(autoincrement())
+  tableName  String // User specified type of the object, eg "ShoppingItem", "UserProfile"
+  table      TableDescriptor @relation(fields: [tableName], references: [tableName])
+  data       Bytes // per column contains: list of collection ids it is shared with and version number of data key
+  nonce      Bytes
+  publicData Json? // You can add indices on specific json fields using postgres create index
+
+  collections CollectionObject[]
+
+  @@index([tableName])
+}
+
+// when obbject unshared from collection 3:
+// list of current collections is returned -> [1,2,3]
+// objectKey is re-genenerated
+// objectKey is encrypted with public key of 1 and 2 (not 3)
+// update CollectionObject rows withh new encrypted object keys
+
+// when collection 2 unshared from group 5:
+// list of current groups is returned -> [3,4,5]
+// collection keypair is re-generated
+// privateKey is encrypted with public key of group 3 and 4 (not 5)
+// update GroupCollection rows with their new encrypted private keys
+// every object key in the collection 
+
+// when user 10 is removed from group 20
+// list of current users is returned -> [10,11,12]
+// group keypair is regenerated
+// privateKey is encrypted with public key of user 11 and 12 (not 10)
+// update GroupUser rows with their new encrypted private keys
+// 
+
+model TableDescriptor {
+  tableName   String            @id @unique
+  description Json
+  objects     Object[]
+  permissions TablePermission[]
+}
+
+model TablePermission {
+  tableName String
+  groupId   BigInt
+
+  canInsert    Boolean
+  canDelete    Boolean
+  canUpdate    Boolean
+  canRead      Boolean
+  // canQuery     Boolean
+  // canShare     Boolean
+  readColumns  String[]
+  writeColumns String[]
+
+  group Group           @relation(fields: [groupId], references: [id])
+  table TableDescriptor @relation(fields: [tableName], references: [tableName])
+
+  @@id([groupId, tableName])
+}
+
+// enum RolePermissionAction {
+//   Create // user can create row (certain columns)
+//   Read // user can read specific rows that it has access to (by id) (certain columns)
+//   Query // user can query multiple rows that is has access to (certain columns)
+//   Update // user can update rows that it has access to (certain columns)
+//   Delete // user ccan delete rows that it has access to
+//   Share // user can share rows that it has access to with group (certain groups)
+// }

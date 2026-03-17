@@ -11,11 +11,18 @@
   "license": "ISC",
   "packageManager": "pnpm@10.30.3",
   "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/pg": "^8.18.0",
     "nodemon": "^3.1.14",
+    "prisma": "^7.5.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "cryptdb-client": "link:../../../../.local/share/pnpm/global/5/node_modules/cryptdb-client"
+    "@prisma/adapter-pg": "^7.5.0",
+    "@prisma/client": "^7.5.0",
+    "cryptdb-client": "link:../../../../.local/share/pnpm/global/5/node_modules/cryptdb-client",
+    "dotenv": "^17.3.1",
+    "pg": "^8.20.0"
   }
 }
