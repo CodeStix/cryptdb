@@ -1,8 +1,9 @@
 import z from "zod";
 import { LoginRequestSchema } from "./types";
-import { deriveKey, encodeBase64, keyToBuffer, textToBytes } from "./crypto";
+import { deriveKey, encodeBase64, exportAesKey, textToBytes } from "./crypto";
 
 export * from "./types";
+export * from "./crypto";
 
 export class CryptClient {
     url: string;
@@ -42,7 +43,7 @@ export class CryptClient {
         // crypto.getRandomValues(salt);
 
         console.time("derivedKey");
-        const derivedKey = await keyToBuffer(await deriveKey(textToBytes(res.user), salt));
+        const derivedKey = await exportAesKey(await deriveKey(textToBytes(res.user), salt));
         console.timeEnd("derivedKey");
 
         console.log("salt", encodeBase64(salt));
