@@ -1,26 +1,37 @@
 import {
-    GetKeyRequestSchema,
-    GetKeyResponse,
+    GetMasterKeyRequestSchema,
     encodeBase64,
     generateSignKeypair,
     LoginRequestSchema,
     sign,
     GetChallengeResponse,
-    GetChallengeRequestSchema,
     LoginResponse,
     verifySignature,
     importSignPublicKey,
+    sha256,
+    deriveKey,
+    exportRawKey,
 } from "cryptdb-client";
 import { PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import http from "http";
 import * as z from "zod";
 import * as bcrypt from "bcrypt";
+import * as jwt from "jsonwebtoken";
+
+const JWT_EXPIRE_IN = 18 * 60 * 60;
+
+type CryptToken = {
+    uid: number;
+    c: number; // counter
+};
 
 class CryptServer {
     server: http.Server;
     prisma: PrismaClient;
-    serverSignKeyPair!: CryptoKeyPair;
+    challengeSignKeyPair!: CryptoKeyPair;
+    // passwordSalt!: Buffer;
+    jwtSecret!: string;
     // validChallenges = new Map<string, Uint8Array>();
 
     constructor() {
@@ -34,7 +45,9 @@ class CryptServer {
     }
 
     public async initialize() {
-        // this.serverSignKeyPair = await generateSignKeypair();
+        this.challengeSignKeyPair = await generateSignKeypair();
+        // this.passwordSalt = Buffer.from("d0f38af4d1226fcefec23573b6c19094", "hex");
+        this.jwtSecret = "d0e58258db29e06243aa24738ff97496";
 
         console.log("Starting server");
 
@@ -115,11 +128,6 @@ class CryptServer {
 
     private async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<unknown> {
         switch (url.pathname) {
-            case "/get-key": {
-                this.ensureHttpMethod(req, "GET");
-                return await this.handleGetKey(url, req, res);
-            }
-
             case "/get-challenge": {
                 this.ensureHttpMethod(req, "GET");
                 return await this.handleGetChallenge(url, req, res);
@@ -146,97 +154,168 @@ class CryptServer {
         }
     }
 
+    // private async hashPassword(buffer: Uint8Array) {
+    //     // A slower KDF is already used on the client, a slower one here will be ok
+    //     // Even if someone was able to crack a password, they still can't decrypt their master key
+    //     return await sha256(Buffer.concat([buffer, this.passwordSalt]));
+    // }
+
     private async handleLogin(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<LoginResponse> {
         const json = await this.parseBodyJsonValidated(req, LoginRequestSchema);
 
-        const challenge = this.validChallenges.get(json.challengeId);
-        if (!challenge) {
-            console.warn("Expired challenge during login", json);
-            res.statusCode = 400;
-            return { status: "expired" };
-        }
-        this.validChallenges.delete(json.challengeId);
-
-        const publicKey = await importSignPublicKey(Buffer.from(json.publicKey, "base64"));
-        const signature = Buffer.from(json.signature, "base64");
-
-        if (!(await verifySignature(challenge, signature, publicKey))) {
-            console.warn("Invalid signature during login", json);
-            res.statusCode = 400;
-            return { status: "invalid-signature" };
-        }
-
-        // const token =
-
-        // jsonwebtoken.sign()
-
-        // res.setHeader("Set-Cookie",);
-
-        return { status: "ok" };
-    }
-
-    private async handleGetChallenge(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<GetChallengeResponse> {
-        // const json = await this.parseBodyJsonValidated(req, GetChallengeRequestSchema);
-
-        const challengeId = crypto.randomUUID() as string;
-        const challenge = crypto.getRandomValues(new Uint8Array(32));
-
-        const MAX_CHALLENGE_SOLVE_TIME = 15000;
-
-        this.validChallenges.set(challengeId, challenge);
-        setTimeout(() => {
-            if (this.validChallenges.delete(challengeId)) {
-                console.warn("Removed unsolved challenge", challengeId);
-            }
-        }, MAX_CHALLENGE_SOLVE_TIME);
-
-        return {
-            status: "ok",
-            challenge: Buffer.from(challenge).toString("base64"),
-            challengeId: challengeId,
-        };
-    }
-
-    private async handleGetKey(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<GetKeyResponse> {
-        const json = await this.parseBodyJsonValidated(req, GetKeyRequestSchema);
-
-        const userKey = await this.prisma.userKey.findFirst({
+        const credential = await this.prisma.userKey.findUnique({
             where: {
-                method: json.method,
-                user: {
-                    userName: json.userName,
-                },
+                identifier: json.identifier,
             },
             include: {
                 user: true,
             },
         });
-
-        if (!userKey) {
-            console.error("Invalid username", json);
-            res.statusCode = 400;
-            return { status: "invalid-username" };
+        if (!credential) {
+            return { status: "unknown-credential" };
         }
 
-        if (!(await bcrypt.compare(json.password, userKey.passwordHash))) {
-            console.error("Invalid password", json);
-            res.statusCode = 400;
-            return { status: "invalid-password" };
+        if (credential.method === "publickey" && json.method === "publickey") {
+            const challenge = Buffer.from(json.challenge, "base64");
+
+            const serverSignature = Buffer.from(json.serverSignature, "base64");
+            if (!(await verifySignature(challenge, serverSignature, this.challengeSignKeyPair.publicKey))) {
+                console.log("Invalid server signature");
+                return { status: "invalid-server-signature" };
+            }
+
+            const challengeView = new DataView(challenge.buffer);
+            const challengeExpireTime = challengeView.getUint32(0);
+            const now = new Date().getTime() / 1000;
+            if (challengeExpireTime < now) {
+                console.log("Challenge expired by", now - challengeExpireTime, "seconds");
+                return { status: "challenge-expired" };
+            }
+
+            const clientSignature = Buffer.from(json.clientSignature, "base64");
+            const publicKey = await importSignPublicKey(credential.publicKey!);
+            if (!(await verifySignature(challenge, clientSignature, publicKey))) {
+                console.log("Invalid client signature");
+                return { status: "invalid-client-signature" };
+            }
+        } else if (credential.method === "password" && json.method === "password") {
+            const password = Buffer.from(json.password, "base64");
+
+            const hashedPassword = await exportRawKey(await deriveKey(password.buffer, credential.passwordSalt!, 100000));
+
+            if (Buffer.compare(credential.passwordHash!, hashedPassword) != 0) {
+                return { status: "wrong-password" };
+            }
+        } else {
+            return { status: "invalid-method" };
         }
+
+        const token = jwt.sign(
+            {
+                uid: Number(credential.userId),
+                c: credential.user.tokenCounter,
+            } as CryptToken,
+            this.jwtSecret,
+            {
+                expiresIn: JWT_EXPIRE_IN,
+            }
+        );
 
         return {
             status: "ok",
-            encryptedMasterKey: Buffer.from(userKey.encryptedMasterKey).toString("base64"),
+            token: token,
 
-            publicSignKey: Buffer.from(userKey.user.publicSignKey).toString("base64"),
-            encryptedPrivateSignKey: Buffer.from(userKey.user.encryptedPrivateSignKey).toString("base64"),
-            encryptedPrivateSignKeyIV: Buffer.from(userKey.user.encryptedPrivateSignKeyIV).toString("base64"),
+            encryptedMasterKey: Buffer.from(credential.encryptedMasterKey).toString("base64"),
 
-            publicDataKey: Buffer.from(userKey.user.publicDataKey).toString("base64"),
-            encryptedPrivateDataKey: Buffer.from(userKey.user.encryptedPrivateDataKey).toString("base64"),
-            encryptedPrivateDataKeyIV: Buffer.from(userKey.user.encryptedPrivateDataKeyIV).toString("base64"),
+            publicSignKey: Buffer.from(credential.user.publicSignKey).toString("base64"),
+            encryptedPrivateSignKey: Buffer.from(credential.user.encryptedPrivateSignKey).toString("base64"),
+            encryptedPrivateSignKeyIV: Buffer.from(credential.user.encryptedPrivateSignKeyIV).toString("base64"),
+
+            publicDataKey: Buffer.from(credential.user.publicDataKey).toString("base64"),
+            encryptedPrivateDataKey: Buffer.from(credential.user.encryptedPrivateDataKey).toString("base64"),
+            encryptedPrivateDataKeyIV: Buffer.from(credential.user.encryptedPrivateDataKeyIV).toString("base64"),
         };
     }
+
+    private async getUserForToken(token: string) {
+        let data: CryptToken;
+        try {
+            data = jwt.verify(token, this.jwtSecret) as CryptToken;
+        } catch (ex) {
+            console.error("Could not verify jwt", ex);
+            return null;
+        }
+
+        const user = await this.prisma.user.findUnique({
+            where: {
+                id: data.uid,
+            },
+        });
+        if (!user) {
+            console.error("Could not find user from token", data);
+            return null;
+        }
+        if (user.tokenCounter !== data.c) {
+            console.error("Token counter doesn't match", user.tokenCounter, "!=", data.c);
+            return null;
+        }
+
+        return user;
+    }
+
+    private async handleGetChallenge(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<GetChallengeResponse> {
+        // const json = await this.parseBodyJsonValidated(req, GetChallengeRequestSchema);
+
+        const MAX_CHALLENGE_SOLVE_TIME = 15;
+
+        const challengeExpireTime = new Date().getTime() / 1000 + MAX_CHALLENGE_SOLVE_TIME;
+
+        const challenge = crypto.getRandomValues(new Uint8Array(32));
+        const dataView = new DataView(challenge.buffer);
+        dataView.setUint32(0, challengeExpireTime);
+
+        const signedChallenge = await sign(challenge.buffer, this.challengeSignKeyPair.privateKey);
+
+        return {
+            challenge: Buffer.from(challenge).toString("base64"),
+            serverSignature: Buffer.from(signedChallenge).toString("base64"),
+        };
+    }
+
+    // private async handleGetKey(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<GetKeyResponse> {
+    //     const json = await this.parseBodyJsonValidated(req, GetMasterKeyRequestSchema);
+
+    //     const userKey = await this.prisma.userKey.findFirst({
+    //         where: {
+    //             method: json.method,
+    //             user: {
+    //                 userName: json.userName,
+    //             },
+    //         },
+    //         include: {
+    //             user: true,
+    //         },
+    //     });
+
+    //     if (!userKey) {
+    //         console.error("Invalid username", json);
+    //         res.statusCode = 400;
+    //         return { status: "invalid-username" };
+    //     }
+
+    //     return {
+    //         status: "ok",
+    //         encryptedMasterKey: Buffer.from(userKey.encryptedMasterKey).toString("base64"),
+
+    //         publicSignKey: Buffer.from(userKey.user.publicSignKey).toString("base64"),
+    //         encryptedPrivateSignKey: Buffer.from(userKey.user.encryptedPrivateSignKey).toString("base64"),
+    //         encryptedPrivateSignKeyIV: Buffer.from(userKey.user.encryptedPrivateSignKeyIV).toString("base64"),
+
+    //         publicDataKey: Buffer.from(userKey.user.publicDataKey).toString("base64"),
+    //         encryptedPrivateDataKey: Buffer.from(userKey.user.encryptedPrivateDataKey).toString("base64"),
+    //         encryptedPrivateDataKeyIV: Buffer.from(userKey.user.encryptedPrivateDataKeyIV).toString("base64"),
+    //     };
+    // }
 }
 
 const server = new CryptServer();

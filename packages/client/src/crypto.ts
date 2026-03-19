@@ -20,7 +20,7 @@ export function decodeBase64(base64: string): Uint8Array {
     return bytes;
 }
 
-export async function deriveKey(password: Uint8Array, salt: Uint8Array) {
+export async function deriveKey(password: ArrayBuffer, salt: Uint8Array, rounds = 250000) {
     // Import password as a CryptoKey
     const keyMaterial = await crypto.subtle.importKey(
         "raw", // raw bytes
@@ -35,7 +35,7 @@ export async function deriveKey(password: Uint8Array, salt: Uint8Array) {
         {
             name: "PBKDF2",
             salt: salt, // Uint8Array
-            iterations: 250000, // recommended: 100k+
+            iterations: rounds, // recommended: 100k+
             hash: "SHA-256", // hash function
         },
         keyMaterial,
@@ -61,7 +61,7 @@ export async function generateSignKeypair() {
     );
 }
 
-export async function sign(data: Uint8Array, privateKey: CryptoKey) {
+export async function sign(data: ArrayBuffer, privateKey: CryptoKey) {
     const signature = await crypto.subtle.sign(
         {
             name: "ECDSA",
@@ -74,7 +74,7 @@ export async function sign(data: Uint8Array, privateKey: CryptoKey) {
     return signature;
 }
 
-export async function verifySignature(data: Uint8Array, signature: Uint8Array, publicKey: CryptoKey) {
+export async function verifySignature(data: BufferSource, signature: BufferSource, publicKey: CryptoKey) {
     return await crypto.subtle.verify(
         {
             name: "ECDSA",
@@ -99,11 +99,11 @@ export async function generateRsaKeypair() {
     );
 }
 
-export async function encryptRsa(data: Uint8Array, publicKey: CryptoKey) {
+export async function encryptRsa(data: BufferSource, publicKey: CryptoKey) {
     return await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, data);
 }
 
-export async function decryptRsa(encryptedData: Uint8Array, privateKey: CryptoKey) {
+export async function decryptRsa(encryptedData: BufferSource, privateKey: CryptoKey) {
     return await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, encryptedData);
 }
 
@@ -123,7 +123,7 @@ export function generateIv() {
 }
 
 // iv = nonce, must be 12 bytes
-export async function encryptAes(data: Uint8Array, iv: Uint8Array, key: CryptoKey) {
+export async function encryptAes(data: BufferSource, iv: BufferSource, key: CryptoKey) {
     return await crypto.subtle.encrypt(
         {
             name: "AES-GCM",
@@ -134,7 +134,7 @@ export async function encryptAes(data: Uint8Array, iv: Uint8Array, key: CryptoKe
     );
 }
 
-export async function decryptAes(encryptedData: Uint8Array, iv: Uint8Array, key: CryptoKey) {
+export async function decryptAes(encryptedData: BufferSource, iv: BufferSource, key: CryptoKey) {
     return await crypto.subtle.decrypt(
         {
             name: "AES-GCM",
@@ -145,19 +145,23 @@ export async function decryptAes(encryptedData: Uint8Array, iv: Uint8Array, key:
     );
 }
 
-export async function sha256(data: Uint8Array) {
+export async function sha256(data: BufferSource) {
     return await crypto.subtle.digest("SHA-256", data);
+}
+
+export async function exportRawKey(key: CryptoKey) {
+    return new Uint8Array(await crypto.subtle.exportKey("raw", key));
 }
 
 export async function exportAesKey(key: CryptoKey) {
     return new Uint8Array(await crypto.subtle.exportKey("raw", key));
 }
 
-export async function importAesKey(rawKey: Uint8Array) {
+export async function importAesKey(rawKey: BufferSource) {
     return await crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
 }
 
-export async function importRsaPrivateKey(rawKey: Uint8Array) {
+export async function importRsaPrivateKey(rawKey: BufferSource) {
     return await crypto.subtle.importKey("pkcs8", rawKey, { name: "RSA-OAEP", hash: "SHA-256" }, true, ["decrypt"]);
 }
 
@@ -165,7 +169,7 @@ export async function exportRsaPrivateKey(key: CryptoKey) {
     return await crypto.subtle.exportKey("pkcs8", key);
 }
 
-export async function importRsaPublicKey(rawKey: Uint8Array) {
+export async function importRsaPublicKey(rawKey: BufferSource) {
     return await crypto.subtle.importKey("spki", rawKey, { name: "RSA-OAEP", hash: "SHA-256" }, true, ["encrypt"]);
 }
 
@@ -173,7 +177,7 @@ export async function exportRsaPublicKey(key: CryptoKey) {
     return await crypto.subtle.exportKey("spki", key);
 }
 
-export async function importSignPrivateKey(rawKey: Uint8Array) {
+export async function importSignPrivateKey(rawKey: BufferSource) {
     return await crypto.subtle.importKey("pkcs8", rawKey, { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
 }
 
@@ -181,7 +185,7 @@ export async function exportSignPrivateKey(key: CryptoKey) {
     return await crypto.subtle.exportKey("pkcs8", key);
 }
 
-export async function importSignPublicKey(rawKey: Uint8Array) {
+export async function importSignPublicKey(rawKey: BufferSource) {
     return await crypto.subtle.importKey("spki", rawKey, { name: "ECDSA", namedCurve: "P-256" }, true, ["verify"]);
 }
 

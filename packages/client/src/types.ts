@@ -1,14 +1,51 @@
 import * as z from "zod";
 
-export const GetKeyRequestSchema = z.object({
-    userName: z.string(),
-    method: z.string(), // can be password/recovery-code
-    password: z.string(),
+export const GetMasterKeyRequestSchema = z.object({
+    identifier: z.string(),
 });
 
-export type GetKeyResponse =
+// export type GetMasterKeyResponse =
+//     | {
+//           status: "ok";
+//           encryptedMasterKey: string; // base64
+//       }
+//     | {
+//           status: "unknown-credential";
+//       };
+
+// export const GetChallengeRequestSchema = z.object({
+//     // userName: z.string(),
+// });
+
+export type GetChallengeResponse = {
+    //   status: "ok";
+    //   challengeId: string;
+    challenge: string; // base64
+    serverSignature: string; // base64
+};
+
+export const LoginRequestSchema = z.xor([
+    z.object({
+        method: z.literal("publickey"),
+        identifier: z.string(),
+        clientSignature: z.base64(),
+        serverSignature: z.base64(),
+        challenge: z.base64(),
+    }),
+    z.object({
+        method: z.literal("password"),
+        identifier: z.string(),
+        // password is actually derived from                PBKDF2(password, salt: username + "random pepper 1")
+        // the real master key is actually encrypted with   PBKDF2(password, salt: username + "random pepper 2")
+        password: z.string(),
+    }),
+]);
+
+export type LoginResponse =
     | {
           status: "ok";
+          token: string;
+
           encryptedMasterKey: string; // base64
 
           // All private keys are encrypted with encryptedMasterKey
@@ -20,42 +57,20 @@ export type GetKeyResponse =
           encryptedPrivateDataKeyIV: string; // base64
       }
     | {
-          status: "invalid-password";
+          status: "unknown-credential";
       }
     | {
-          status: "invalid-username";
-      };
-
-export const GetChallengeRequestSchema = z.object({
-    // userName: z.string(),
-});
-
-export type GetChallengeResponse =
-    | {
-          status: "ok";
-          challengeId: string;
-          challenge: string; // base64
+          status: "invalid-client-signature";
       }
     | {
-          status: "user-not-found";
-      };
-
-export const LoginRequestSchema = z.object({
-    // publicKey: z.base64(),
-    // challengeId: z.string(),
-    // challenge: z.base64(),
-    challengeId: z.string(),
-    signature: z.base64(),
-});
-
-export type LoginResponse =
-    | {
-          status: "ok";
-          token: string;
+          status: "invalid-server-signature";
       }
     | {
-          status: "expired";
+          status: "challenge-expired";
       }
     | {
-          status: "invalid-signature";
+          status: "wrong-password";
+      }
+    | {
+          status: "invalid-method";
       };

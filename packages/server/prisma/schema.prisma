@@ -14,10 +14,17 @@ datasource db {
 
 model UserKey {
   id                 BigInt @id @default(autoincrement())
-  method             String
+  identifier         String @unique // Contains username or credential id
+  method             String // "password" or "publickey"
   userId             BigInt
   user               User   @relation(fields: [userId], references: [id])
-  passwordHash       String // hash(hash(KDF(password))) used to decrypt encryptedPrivateSignKey and encryptedPrivateDataKey
+  // When method == "publickey"
+  publicKey          Bytes?
+  // When method == "password"
+  passwordHash       Bytes?
+  passwordSalt       Bytes?
+  // When method == "password"  -> contains master key encrypted with password-derived key (different password than stored in keyData)
+  // When method == "publickey" -> contains master key encrypted with public key
   encryptedMasterKey Bytes
 
   @@unique([userId, method])
@@ -30,6 +37,8 @@ model User {
   personalGroupId      BigInt     @unique
   personalCollection   Collection @relation(fields: [personalCollectionId], references: [id])
   personalCollectionId BigInt     @unique
+
+  tokenCounter Int @default(0)
 
   // Encrypted with master key (stored in UserKey)
   publicSignKey             Bytes
