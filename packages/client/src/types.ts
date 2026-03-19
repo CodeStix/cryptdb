@@ -27,22 +27,24 @@ export type GetKeyResponse =
       };
 
 export const GetChallengeRequestSchema = z.object({
-    userName: z.string(),
+    // userName: z.string(),
 });
 
 export type GetChallengeResponse =
     | {
-          // challengeId: string;
           status: "ok";
+          challengeId: string;
           challenge: string; // base64
-          // challengeServerSignature: string; // base64
       }
-    | { status: "user-not-found" };
+    | {
+          status: "user-not-found";
+      };
 
 export const LoginRequestSchema = z.object({
     // publicKey: z.base64(),
     // challengeId: z.string(),
-    challenge: z.base64(),
+    // challenge: z.base64(),
+    challengeId: z.string(),
     signature: z.base64(),
 });
 
@@ -57,5 +59,3 @@ export type LoginResponse =
     | {
           status: "invalid-signature";
       };
-
-export type ChallengeData = { uid: number };

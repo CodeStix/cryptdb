@@ -10,20 +10,17 @@ import {
     LoginResponse,
     verifySignature,
     importSignPublicKey,
-    ChallengeData,
 } from "cryptdb-client";
 import { PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import http from "http";
 import * as z from "zod";
 import * as bcrypt from "bcrypt";
-import * as jsonwebtoken from "jsonwebtoken";
-import assert from "assert";
 
 class CryptServer {
     server: http.Server;
     prisma: PrismaClient;
-    // serverSignKeyPair!: CryptoKeyPair;
+    serverSignKeyPair!: CryptoKeyPair;
     // validChallenges = new Map<string, Uint8Array>();
 
     constructor() {
@@ -40,8 +37,6 @@ class CryptServer {
         // this.serverSignKeyPair = await generateSignKeypair();
 
         console.log("Starting server");
-
-        assert.notEqual(process.env.TOKEN_SECRET, null);
 
         const port = 8080;
         this.server.listen(port, () => {
@@ -154,80 +149,51 @@ class CryptServer {
     private async handleLogin(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<LoginResponse> {
         const json = await this.parseBodyJsonValidated(req, LoginRequestSchema);
 
-        const challenge = Buffer.from(json.challenge, "base64");
-
-        let token: ChallengeData;
-        try {
-            token = jsonwebtoken.verify(challenge.toString("utf-8"), process.env.TOKEN_SECRET!, {
-                jwtid: "challenge",
-            }) as ChallengeData;
-        } catch (ex) {
-            console.error("Could not verify login challenge jwt", ex);
+        const challenge = this.validChallenges.get(json.challengeId);
+        if (!challenge) {
+            console.warn("Expired challenge during login", json);
             res.statusCode = 400;
             return { status: "expired" };
         }
+        this.validChallenges.delete(json.challengeId);
 
-        const user = await this.prisma.user.findUnique({
-            where: {
-                id: token.uid,
-            },
-        });
-        if (!user) {
-            console.error("User doesn't exist in challenge jwt");
-            res.statusCode = 400;
-            return { status: "expired" };
-        }
+        const publicKey = await importSignPublicKey(Buffer.from(json.publicKey, "base64"));
+        const signature = Buffer.from(json.signature, "base64");
 
-        const userPublicKey = await importSignPublicKey(user.publicSignKey);
-        const signature = Buffer.from(json.signature);
-
-        if (!(await verifySignature(challenge, signature, userPublicKey))) {
+        if (!(await verifySignature(challenge, signature, publicKey))) {
             console.warn("Invalid signature during login", json);
             res.statusCode = 400;
             return { status: "invalid-signature" };
         }
 
-        const accessToken = jsonwebtoken.sign(
-            {
-                uid: Number(user.id),
-            } as ChallengeData,
-            process.env.TOKEN_SECRET!,
-            {
-                expiresIn: 60 * 60 * 18,
-                jwtid: "access",
-            }
-        );
+        // const token =
 
-        return { status: "ok", token: accessToken };
+        // jsonwebtoken.sign()
+
+        // res.setHeader("Set-Cookie",);
+
+        return { status: "ok" };
     }
 
     private async handleGetChallenge(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<GetChallengeResponse> {
-        const json = await this.parseBodyJsonValidated(req, GetChallengeRequestSchema);
+        // const json = await this.parseBodyJsonValidated(req, GetChallengeRequestSchema);
 
-        const user = await this.prisma.user.findUnique({
-            where: {
-                userName: json.userName,
-            },
-        });
+        const challengeId = crypto.randomUUID() as string;
+        const challenge = crypto.getRandomValues(new Uint8Array(32));
 
-        if (!user) {
-            return { status: "user-not-found" };
-        }
+        const MAX_CHALLENGE_SOLVE_TIME = 15000;
 
-        const challengeJwt = jsonwebtoken.sign(
-            {
-                uid: Number(user.id),
-            } as ChallengeData,
-            process.env.TOKEN_SECRET!,
-            {
-                expiresIn: 20,
-                jwtid: "challenge",
+        this.validChallenges.set(challengeId, challenge);
+        setTimeout(() => {
+            if (this.validChallenges.delete(challengeId)) {
+                console.warn("Removed unsolved challenge", challengeId);
             }
-        );
+        }, MAX_CHALLENGE_SOLVE_TIME);
 
         return {
             status: "ok",
-            challenge: Buffer.from(challengeJwt, "utf-8").toString("base64"),
+            challenge: Buffer.from(challenge).toString("base64"),
+            challengeId: challengeId,
         };
     }
 
