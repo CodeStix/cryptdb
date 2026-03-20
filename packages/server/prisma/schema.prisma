@@ -32,7 +32,7 @@ model UserKey {
 
 model User {
   id                   BigInt     @id @default(autoincrement())
-  userName             String     @unique
+  // userName             String     @unique
   personalGroup        Group      @relation(fields: [personalGroupId], references: [id])
   personalGroupId      BigInt     @unique
   personalCollection   Collection @relation(fields: [personalCollectionId], references: [id])

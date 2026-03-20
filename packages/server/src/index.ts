@@ -1,5 +1,4 @@
 import {
-    GetMasterKeyRequestSchema,
     encodeBase64,
     generateSignKeypair,
     LoginRequestSchema,
@@ -11,6 +10,14 @@ import {
     sha256,
     deriveKey,
     exportRawKey,
+    RegisterRequestSchema,
+    generateRsaKeypair,
+    encryptAes,
+    encryptRsa,
+    exportRsaPrivateKey,
+    importRsaPublicKey,
+    RegisterResponse,
+    ChallengeVerificationStatus,
 } from "cryptdb-client";
 import { PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -32,6 +39,8 @@ class CryptServer {
     challengeSignKeyPair!: CryptoKeyPair;
     // passwordSalt!: Buffer;
     jwtSecret!: string;
+    publicGroupKeyPair!: CryptoKeyPair;
+    publicGroupId!: number;
     // validChallenges = new Map<string, Uint8Array>();
 
     constructor() {
@@ -46,8 +55,11 @@ class CryptServer {
 
     public async initialize() {
         this.challengeSignKeyPair = await generateSignKeypair();
+        this.publicGroupKeyPair = await generateRsaKeypair();
         // this.passwordSalt = Buffer.from("d0f38af4d1226fcefec23573b6c19094", "hex");
         this.jwtSecret = "d0e58258db29e06243aa24738ff97496";
+
+        this.publicGroupId = 1;
 
         console.log("Starting server");
 
@@ -154,11 +166,201 @@ class CryptServer {
         }
     }
 
-    // private async hashPassword(buffer: Uint8Array) {
-    //     // A slower KDF is already used on the client, a slower one here will be ok
-    //     // Even if someone was able to crack a password, they still can't decrypt their master key
-    //     return await sha256(Buffer.concat([buffer, this.passwordSalt]));
-    // }
+    private async handleRegister(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<RegisterResponse> {
+        const json = await this.parseBodyJsonValidated(req, RegisterRequestSchema);
+
+        const encryptedMasterKey = Buffer.from(json.encryptedMasterKey, "base64");
+        const publicSignKey = Buffer.from(json.publicSignKey, "base64");
+        const encryptedPrivateSignKey = Buffer.from(json.encryptedPrivateSignKey, "base64");
+        const encryptedPrivateSignKeyIV = Buffer.from(json.encryptedPrivateSignKeyIV, "base64");
+        const publicDataKey = Buffer.from(json.publicDataKey, "base64");
+        const encryptedPrivateDataKey = Buffer.from(json.encryptedPrivateDataKey, "base64");
+        const encryptedPrivateDataKeyIV = Buffer.from(json.encryptedPrivateDataKeyIV, "base64");
+        const groupPublicKey = Buffer.from(json.groupPublicKey, "base64");
+        const groupEncryptedPrivateKey = Buffer.from(json.groupEncryptedPrivateKey, "base64");
+        const collectionPublicKey = Buffer.from(json.collectionPublicKey, "base64");
+        const collectionEncryptedPrivateKey = Buffer.from(json.collectionEncryptedPrivateKey, "base64");
+
+        let publicGroupEncryptedPrivateKey: ArrayBuffer;
+        try {
+            publicGroupEncryptedPrivateKey = await encryptRsa(
+                await exportRsaPrivateKey(this.publicGroupKeyPair.privateKey),
+                await importRsaPublicKey(publicDataKey)
+            );
+        } catch (ex) {
+            console.error("Invalid data public key", json);
+            return { status: "invalid-public-data-key" };
+        }
+
+        if (json.method === "password") {
+            // ...
+        } else if (json.method === "publickey") {
+            const challenge = Buffer.from(json.challenge, "base64");
+            const serverSignature = Buffer.from(json.serverSignature, "base64");
+            const clientSignature = Buffer.from(json.clientSignature, "base64");
+
+            let publicChallengeKey: CryptoKey;
+            try {
+                publicChallengeKey = await importRsaPublicKey(Buffer.from(json.publicKey, "base64"));
+            } catch (ex) {
+                console.error("Invalid publicChallengeKey", ex);
+                return { status: "invalid-public-challenge-key" };
+            }
+
+            const verificationStatus = await this.verifyChallenge(challenge, serverSignature, clientSignature, publicChallengeKey);
+            if (verificationStatus !== "ok") {
+                return { status: verificationStatus };
+            }
+        }
+
+        const user = await this.prisma.$transaction(async (prisma) => {
+            const group = await prisma.group.create({
+                data: {
+                    publicKey: groupPublicKey,
+                    name: "PersonalGroup",
+                    canCreateCollections: false,
+                },
+            });
+
+            const collection = await prisma.collection.create({
+                data: {
+                    name: "PersonalCollection",
+                    publicKey: collectionPublicKey,
+                },
+            });
+
+            const user = await prisma.user.create({
+                data: {
+                    publicSignKey: publicSignKey,
+                    encryptedPrivateSignKey: encryptedPrivateSignKey,
+                    encryptedPrivateSignKeyIV: encryptedPrivateSignKeyIV,
+                    publicDataKey: publicDataKey,
+                    encryptedPrivateDataKey: encryptedPrivateDataKey,
+                    encryptedPrivateDataKeyIV: encryptedPrivateDataKeyIV,
+
+                    personalGroupId: group.id,
+                    personalCollectionId: collection.id,
+                },
+                select: {
+                    id: true,
+                    tokenCounter: true,
+                },
+            });
+
+            await prisma.groupUser.create({
+                data: {
+                    encryptedGroupPrivateKey: groupEncryptedPrivateKey,
+                    groupId: group.id,
+                    userId: user.id,
+                    role: "Reader", // Do not allow adding other users to personal group
+                },
+            });
+
+            await prisma.groupUser.create({
+                data: {
+                    encryptedGroupPrivateKey: Buffer.from(publicGroupEncryptedPrivateKey),
+                    userId: user.id,
+                    groupId: this.publicGroupId,
+                    role: "Reader", // Do not allow adding other users to public group
+                },
+            });
+
+            await prisma.groupCollection.create({
+                data: {
+                    collectionId: collection.id,
+                    groupId: group.id,
+                    canAdd: true,
+                    // canRead: true,
+                    canRemove: true,
+                    canWrite: true,
+                    canModerate: false, // Do not allow sharing the personal collection
+                    encryptedCollectionPrivateKey: collectionEncryptedPrivateKey,
+                },
+            });
+
+            if (json.method === "password") {
+                const password = Buffer.from(json.password, "base64");
+
+                const passwordSalt = crypto.getRandomValues(new Uint8Array(32));
+                const hashedPassword = await this.hashPassword(password, passwordSalt);
+
+                await this.prisma.userKey.create({
+                    data: {
+                        encryptedMasterKey: encryptedMasterKey,
+                        identifier: json.identifier,
+                        method: json.method,
+                        passwordHash: hashedPassword,
+                        passwordSalt: passwordSalt,
+                        userId: user.id,
+                    },
+                });
+            } else if (json.method === "publickey") {
+                const publicKey = Buffer.from(json.publicKey, "base64");
+                await this.prisma.userKey.create({
+                    data: {
+                        encryptedMasterKey: encryptedMasterKey,
+                        identifier: json.identifier,
+                        method: json.method,
+                        publicKey: publicKey,
+                        userId: user.id,
+                    },
+                });
+            }
+
+            return user;
+        });
+
+        const token = this.createAccessToken(user.id, user.tokenCounter);
+
+        return {
+            status: "ok",
+            token: token,
+        };
+    }
+
+    private async hashPassword(password: BufferSource, salt: BufferSource) {
+        return await exportRawKey(await deriveKey(password, salt, 100000));
+    }
+
+    private async verifyChallenge(
+        challenge: Buffer,
+        serverSignature: Buffer,
+        clientSignature: Buffer,
+        clientPublicKey: CryptoKey
+    ): Promise<ChallengeVerificationStatus> {
+        if (!(await verifySignature(challenge, serverSignature, this.challengeSignKeyPair.publicKey))) {
+            console.log("Invalid server signature");
+            return "invalid-server-signature";
+        }
+
+        const challengeView = new DataView(challenge.buffer);
+        const challengeExpireTime = challengeView.getUint32(0);
+        const now = new Date().getTime() / 1000;
+        if (challengeExpireTime < now) {
+            console.log("Challenge expired by", now - challengeExpireTime, "seconds");
+            return "challenge-expired";
+        }
+
+        if (!(await verifySignature(challenge, clientSignature, clientPublicKey))) {
+            console.log("Invalid client signature");
+            return "invalid-client-signature";
+        }
+
+        return "ok";
+    }
+
+    private createAccessToken(userId: number | bigint, tokenCounter: number) {
+        return jwt.sign(
+            {
+                uid: Number(userId),
+                c: tokenCounter,
+            } as CryptToken,
+            this.jwtSecret,
+            {
+                expiresIn: JWT_EXPIRE_IN,
+            }
+        );
+    }
 
     private async handleLogin(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<LoginResponse> {
         const json = await this.parseBodyJsonValidated(req, LoginRequestSchema);
@@ -177,31 +379,18 @@ class CryptServer {
 
         if (credential.method === "publickey" && json.method === "publickey") {
             const challenge = Buffer.from(json.challenge, "base64");
-
             const serverSignature = Buffer.from(json.serverSignature, "base64");
-            if (!(await verifySignature(challenge, serverSignature, this.challengeSignKeyPair.publicKey))) {
-                console.log("Invalid server signature");
-                return { status: "invalid-server-signature" };
-            }
-
-            const challengeView = new DataView(challenge.buffer);
-            const challengeExpireTime = challengeView.getUint32(0);
-            const now = new Date().getTime() / 1000;
-            if (challengeExpireTime < now) {
-                console.log("Challenge expired by", now - challengeExpireTime, "seconds");
-                return { status: "challenge-expired" };
-            }
-
             const clientSignature = Buffer.from(json.clientSignature, "base64");
             const publicKey = await importSignPublicKey(credential.publicKey!);
-            if (!(await verifySignature(challenge, clientSignature, publicKey))) {
-                console.log("Invalid client signature");
-                return { status: "invalid-client-signature" };
+
+            const verificationStatus = await this.verifyChallenge(challenge, serverSignature, clientSignature, publicKey);
+            if (verificationStatus !== "ok") {
+                return { status: verificationStatus };
             }
         } else if (credential.method === "password" && json.method === "password") {
             const password = Buffer.from(json.password, "base64");
 
-            const hashedPassword = await exportRawKey(await deriveKey(password.buffer, credential.passwordSalt!, 100000));
+            const hashedPassword = await this.hashPassword(password, credential.passwordSalt!);
 
             if (Buffer.compare(credential.passwordHash!, hashedPassword) != 0) {
                 return { status: "wrong-password" };
@@ -210,16 +399,7 @@ class CryptServer {
             return { status: "invalid-method" };
         }
 
-        const token = jwt.sign(
-            {
-                uid: Number(credential.userId),
-                c: credential.user.tokenCounter,
-            } as CryptToken,
-            this.jwtSecret,
-            {
-                expiresIn: JWT_EXPIRE_IN,
-            }
-        );
+        const token = this.createAccessToken(credential.userId, credential.user.tokenCounter);
 
         return {
             status: "ok",

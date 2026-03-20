@@ -20,7 +20,7 @@ export function decodeBase64(base64: string): Uint8Array {
     return bytes;
 }
 
-export async function deriveKey(password: ArrayBuffer, salt: Uint8Array, rounds = 250000) {
+export async function deriveKey(password: BufferSource, salt: BufferSource, rounds = 250000) {
     // Import password as a CryptoKey
     const keyMaterial = await crypto.subtle.importKey(
         "raw", // raw bytes
@@ -61,7 +61,7 @@ export async function generateSignKeypair() {
     );
 }
 
-export async function sign(data: ArrayBuffer, privateKey: CryptoKey) {
+export async function sign(data: BufferSource, privateKey: CryptoKey) {
     const signature = await crypto.subtle.sign(
         {
             name: "ECDSA",
