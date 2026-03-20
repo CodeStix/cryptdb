@@ -152,10 +152,7 @@ class CryptServer {
 
             case "/register": {
                 this.ensureHttpMethod(req, "POST");
-
-                const json = await this.parseBodyJsonValidated(req, LoginRequestSchema);
-
-                break;
+                return await this.handleRegister(url, req, res);
             }
 
             default: {
@@ -170,6 +167,7 @@ class CryptServer {
         const json = await this.parseBodyJsonValidated(req, RegisterRequestSchema);
 
         const encryptedMasterKey = Buffer.from(json.encryptedMasterKey, "base64");
+        const encryptedMasterKeyIV = Buffer.from(json.encryptedMasterKeyIV, "base64");
         const publicSignKey = Buffer.from(json.publicSignKey, "base64");
         const encryptedPrivateSignKey = Buffer.from(json.encryptedPrivateSignKey, "base64");
         const encryptedPrivateSignKeyIV = Buffer.from(json.encryptedPrivateSignKeyIV, "base64");
@@ -282,11 +280,12 @@ class CryptServer {
                 const password = Buffer.from(json.password, "base64");
 
                 const passwordSalt = crypto.getRandomValues(new Uint8Array(32));
-                const hashedPassword = await this.hashPassword(password, passwordSalt);
+                const hashedPassword = new Uint8Array(await this.hashPassword(password, passwordSalt));
 
                 await this.prisma.userKey.create({
                     data: {
                         encryptedMasterKey: encryptedMasterKey,
+                        encryptedMasterKeyIV: encryptedMasterKeyIV,
                         identifier: json.identifier,
                         method: json.method,
                         passwordHash: hashedPassword,
@@ -299,6 +298,7 @@ class CryptServer {
                 await this.prisma.userKey.create({
                     data: {
                         encryptedMasterKey: encryptedMasterKey,
+                        encryptedMasterKeyIV: encryptedMasterKeyIV,
                         identifier: json.identifier,
                         method: json.method,
                         publicKey: publicKey,
@@ -390,7 +390,7 @@ class CryptServer {
         } else if (credential.method === "password" && json.method === "password") {
             const password = Buffer.from(json.password, "base64");
 
-            const hashedPassword = await this.hashPassword(password, credential.passwordSalt!);
+            const hashedPassword = new Uint8Array(await this.hashPassword(password, credential.passwordSalt!));
 
             if (Buffer.compare(credential.passwordHash!, hashedPassword) != 0) {
                 return { status: "wrong-password" };
@@ -406,6 +406,7 @@ class CryptServer {
             token: token,
 
             encryptedMasterKey: Buffer.from(credential.encryptedMasterKey).toString("base64"),
+            encryptedMasterKeyIV: Buffer.from(credential.encryptedMasterKeyIV).toString("base64"),
 
             publicSignKey: Buffer.from(credential.user.publicSignKey).toString("base64"),
             encryptedPrivateSignKey: Buffer.from(credential.user.encryptedPrivateSignKey).toString("base64"),
@@ -461,41 +462,6 @@ class CryptServer {
             serverSignature: Buffer.from(signedChallenge).toString("base64"),
         };
     }
-
-    // private async handleGetKey(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<GetKeyResponse> {
-    //     const json = await this.parseBodyJsonValidated(req, GetMasterKeyRequestSchema);
-
-    //     const userKey = await this.prisma.userKey.findFirst({
-    //         where: {
-    //             method: json.method,
-    //             user: {
-    //                 userName: json.userName,
-    //             },
-    //         },
-    //         include: {
-    //             user: true,
-    //         },
-    //     });
-
-    //     if (!userKey) {
-    //         console.error("Invalid username", json);
-    //         res.statusCode = 400;
-    //         return { status: "invalid-username" };
-    //     }
-
-    //     return {
-    //         status: "ok",
-    //         encryptedMasterKey: Buffer.from(userKey.encryptedMasterKey).toString("base64"),
-
-    //         publicSignKey: Buffer.from(userKey.user.publicSignKey).toString("base64"),
-    //         encryptedPrivateSignKey: Buffer.from(userKey.user.encryptedPrivateSignKey).toString("base64"),
-    //         encryptedPrivateSignKeyIV: Buffer.from(userKey.user.encryptedPrivateSignKeyIV).toString("base64"),
-
-    //         publicDataKey: Buffer.from(userKey.user.publicDataKey).toString("base64"),
-    //         encryptedPrivateDataKey: Buffer.from(userKey.user.encryptedPrivateDataKey).toString("base64"),
-    //         encryptedPrivateDataKeyIV: Buffer.from(userKey.user.encryptedPrivateDataKeyIV).toString("base64"),
-    //     };
-    // }
 }
 
 const server = new CryptServer();

@@ -13,6 +13,7 @@ export const RegisterRequestSchema = z.xor([
         challenge: z.base64(),
 
         encryptedMasterKey: z.base64(),
+        encryptedMasterKeyIV: z.base64(),
         publicSignKey: z.base64(),
         encryptedPrivateSignKey: z.base64(),
         encryptedPrivateSignKeyIV: z.base64(),
@@ -31,6 +32,7 @@ export const RegisterRequestSchema = z.xor([
         password: z.string(),
 
         encryptedMasterKey: z.base64(),
+        encryptedMasterKeyIV: z.base64(),
         publicSignKey: z.base64(),
         encryptedPrivateSignKey: z.base64(),
         encryptedPrivateSignKeyIV: z.base64(),
@@ -93,6 +95,7 @@ export type LoginResponse =
           token: string;
 
           encryptedMasterKey: string; // base64
+          encryptedMasterKeyIV: string; // base64
 
           // All private keys are encrypted with encryptedMasterKey
           publicSignKey: string; // base64
