@@ -1,6 +1,7 @@
 import * as z from "zod";
 import nacl from "tweetnacl";
 import { NACL_EPHEMERAL_BOX_OVERHEAD } from "./crypto";
+import { decodeBase64 } from "tweetnacl-util";
 
 export type ChallengeVerificationStatus = "ok" | "invalid-server-signature" | "challenge-expired" | "invalid-client-signature";
 
@@ -13,11 +14,6 @@ function base64Length(byteCount: number): number {
 // }
 
 function specificBase64(minBytes: number, maxBytes?: number) {
-    // const unpadded = z
-    //     .base64url()
-    //     .min(base64LengthNoPadding(minBytes))
-    //     .max(base64LengthNoPadding(maxBytes ?? minBytes));
-
     return z
         .base64()
         .min(base64Length(minBytes))
@@ -91,7 +87,7 @@ export type GetChallengeResponse = {
     serverSignedChallenge: string; // base64
 };
 
-export const LoginRequestSchema = z.xor([
+export const LoginRequestSchema = z.discriminatedUnion("method", [
     z.object({
         method: z.literal("publickey"),
         identifier: z.string().min(8).max(64),
@@ -103,6 +99,16 @@ export const LoginRequestSchema = z.xor([
         // password is actually derived from                PBKDF2(password, salt: username + "random pepper 1")
         // the real master key is actually encrypted with   PBKDF2(password, salt: username + "random pepper 2")
         password: z.string().min(8).max(64),
+    }),
+]);
+
+export const LoginResponseSchema = z.discriminatedUnion("status", [
+    z.object({
+        status: z.literal("ok"),
+        encryptedMasterKey: z.base64().transform((e) => decodeBase64(e)),
+    }),
+    z.object({
+        status: z.literal("unknown-credential"),
     }),
 ]);
 
