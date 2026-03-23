@@ -1,11 +1,14 @@
 import z from "zod";
-import { LoginRequestSchema, LoginResponse, RegisterRequestSchema, RegisterResponse } from "./types";
+import {} from "./types";
 import nacl from "tweetnacl";
 import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from "tweetnacl-util";
 import { naclBoxEphemeral, deriveKey } from "./crypto";
+import { LoginRequest, LoginRequestSchema, LoginResponse } from "./generated/protocol_pb";
+import { create, MessageInitShape } from "@bufbuild/protobuf";
 
 export * from "./types";
 export * from "./crypto";
+export * from "./generated/protocol_pb";
 
 const AUTH_SALT_PREFIX = "ap";
 const KEY_SALT_PREFIX = "mk";
@@ -63,10 +66,24 @@ export class CryptClient {
         const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
         const masterKeyPassword = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
 
-        const res = await this.fetchJson<z.infer<typeof LoginRequestSchema>, LoginResponse>("POST", "/login", {
-            method: "password",
-            identifier: identifier,
-            password: encodeBase64(authPassword),
+        // create(LoginRequestSchema, {
+        //     method: {
+        //         case: "password",
+        //         value: {
+        //             identifier: identifier,
+        //             password: encodeBase64(authPassword),
+        //         },
+        //     },
+        // });
+
+        const res = await this.fetchJson<LoginRequest, LoginResponse>("POST", "/login", {
+            method: {
+                case: "password",
+                value: {
+                    identifier: identifier,
+                    password: encodeBase64(authPassword),
+                },
+            },
         });
 
         if (res.status !== "ok") {

@@ -1,6 +1,6 @@
 import "dotenv/config";
 import {
-    LoginRequestSchema,
+    // LoginRequestSchema,
     GetChallengeResponse,
     LoginResponse,
     RegisterRequestSchema,
@@ -8,6 +8,7 @@ import {
     ChallengeVerificationStatus,
     deriveKey,
     naclBoxEphemeral,
+    LoginRequestSchema,
 } from "cryptdb-client";
 import { PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -17,6 +18,8 @@ import * as bcrypt from "bcrypt";
 import * as jwt from "jsonwebtoken";
 import nacl from "tweetnacl";
 import console from "console";
+import { createValidator } from "@bufbuild/protovalidate";
+import { DescMessage, fromBinary, create, MessageShape, MessageInitShape, toBinary } from "@bufbuild/protobuf";
 
 const JWT_EXPIRE_IN = 18 * 60 * 60;
 
@@ -119,62 +122,117 @@ class CryptServer {
         });
     }
 
-    private async parseBodyJsonValidated<T extends z.ZodType>(req: http.IncomingMessage, schema: T): Promise<z.infer<T>> {
-        const json = await this.parseBodyJson(req);
-        console.log("json", json);
-        return await schema.parseAsync(json);
+    private async parseBodyProtoValidated<Desc extends DescMessage>(req: http.IncomingMessage, schema: Desc): Promise<MessageShape<Desc>> {
+        const validator = createValidator();
+
+        const buffer = await this.parseBodyBytes(req);
+
+        const msg = fromBinary(schema, buffer);
+
+        const result = validator.validate(schema, msg);
+        if (result.kind !== "valid") {
+            console.log("Validation failed", result);
+            throw new Error("Validation failed");
+        }
+
+        return msg;
     }
 
-    private async parseBodyJson(req: http.IncomingMessage) {
+    private async serializeMessage<Desc extends DescMessage>(schema: Desc, msg: MessageInitShape<Desc>) {
+        const m = create(schema, msg);
+        return Buffer.from(toBinary(schema, m));
+    }
+
+    // private async parseBodyJsonValidated<T extends z.ZodType>(req: http.IncomingMessage, schema: T): Promise<z.infer<T>> {
+    //     const json = await this.parseBodyJson(req);
+    //     console.log("json", json);
+    //     return await schema.parseAsync(json);
+    // }
+
+    private async parseBodyBytes(req: http.IncomingMessage) {
         const contentType = req.headers["content-type"] || "";
-        if (!contentType.startsWith("application/json")) {
+        if (!contentType.startsWith("application/octet-stream")) {
             throw new Error("Unsupported Content-Type");
         }
 
+        const chunks = [] as Buffer[];
+
         const MAX_BODY = 1 * 1024 * 1024;
+        let totalSize = 0;
 
-        return new Promise<any>((resolve, reject) => {
-            let chunks = [] as Buffer[];
-            let received = 0;
-
+        return new Promise<Buffer>((resolve, reject) => {
             req.on("data", (chunk: Buffer) => {
-                received += chunk.length;
-
-                if (received > MAX_BODY) {
+                totalSize += chunk.length;
+                if (totalSize > MAX_BODY) {
                     req.destroy();
-                    reject(new Error("Request too large"));
+                    reject(new Error("Body too large"));
                     return;
                 }
-
                 chunks.push(chunk);
             });
 
             req.on("end", () => {
-                try {
-                    const str = Buffer.concat(chunks).toString("utf8");
-                    resolve(JSON.parse(str));
-                } catch (ex) {
-                    reject(ex);
-                }
+                if (req.destroyed) return;
+                resolve(Buffer.concat(chunks));
             });
 
-            req.on("error", (error) => {
-                console.error("Request error:", error.message);
-                reject(new Error("Request error"));
+            req.on("error", (err) => {
+                reject(err);
             });
         });
     }
+
+    // private async parseBodyJson(req: http.IncomingMessage) {
+    //     const contentType = req.headers["content-type"] || "";
+    //     if (!contentType.startsWith("application/json")) {
+    //         throw new Error("Unsupported Content-Type");
+    //     }
+
+    //     const MAX_BODY = 1 * 1024 * 1024;
+
+    //     return new Promise<any>((resolve, reject) => {
+    //         let chunks = [] as Buffer[];
+    //         let received = 0;
+
+    //         req.on("data", (chunk: Buffer) => {
+    //             received += chunk.length;
+
+    //             if (received > MAX_BODY) {
+    //                 req.destroy();
+    //                 reject(new Error("Request too large"));
+    //                 return;
+    //             }
+
+    //             chunks.push(chunk);
+    //         });
+
+    //         req.on("end", () => {
+    //             try {
+    //                 const str = Buffer.concat(chunks).toString("utf8");
+    //                 resolve(JSON.parse(str));
+    //             } catch (ex) {
+    //                 reject(ex);
+    //             }
+    //         });
+
+    //         req.on("error", (error) => {
+    //             console.error("Request error:", error.message);
+    //             reject(new Error("Request error"));
+    //         });
+    //     });
+    // }
 
     private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         console.log("Req", req.url);
 
         try {
             const url = new URL(req.url!, "http://localhost");
-            const jsonRes = await this.handleUrl(url, req, res);
+            const bufferRes = await this.handleUrl(url, req, res);
 
-            if (typeof jsonRes !== "undefined") {
-                console.log("Response", jsonRes);
-                res.end(JSON.stringify(jsonRes));
+            if (typeof bufferRes !== "undefined") {
+                console.log("Response", bufferRes);
+                res.end(bufferRes);
+                // res.end(JSON.stringify(bufferRes));
             } else {
                 console.log("Response open-ended");
             }
@@ -192,11 +250,12 @@ class CryptServer {
         }
     }
 
-    private async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<unknown> {
+    private async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<Buffer> {
         switch (url.pathname) {
             case "/get-challenge": {
                 this.ensureHttpMethod(req, "GET");
-                return await this.handleGetChallenge(url, req, res);
+
+                return this.serializeMessage(LoginRequestSchema, await this.handleGetChallenge(url, req, res));
             }
 
             case "/login": {
@@ -218,7 +277,6 @@ class CryptServer {
     }
 
     private async handleRegister(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<RegisterResponse> {
-        
         const json = await this.parseBodyJsonValidated(req, RegisterRequestSchema);
 
         const encryptedMasterKey = Buffer.from(json.encryptedMasterKey, "base64");
