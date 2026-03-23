@@ -10,20 +10,22 @@ function deriveNonce(ephemeralPk: Uint8Array, recipientPk: Uint8Array): Uint8Arr
     return nacl.hash(input).slice(0, 24);
 }
 
+export const NACL_EPHEMERAL_BOX_OVERHEAD = nacl.box.publicKeyLength;
+
 export function naclBoxEphemeral(message: Uint8Array, recipientPk: Uint8Array): Uint8Array {
     const ephemeral = nacl.box.keyPair();
     const nonce = deriveNonce(ephemeral.publicKey, recipientPk);
     const encrypted = nacl.box(message, nonce, recipientPk, ephemeral.secretKey);
 
-    const result = new Uint8Array(32 + encrypted.length);
+    const result = new Uint8Array(NACL_EPHEMERAL_BOX_OVERHEAD + encrypted.length);
     result.set(ephemeral.publicKey, 0);
-    result.set(encrypted, 32);
+    result.set(encrypted, NACL_EPHEMERAL_BOX_OVERHEAD);
     return result;
 }
 
 export function naclBoxEphemeralOpen(ciphertext: Uint8Array, recipientPk: Uint8Array, recipientSk: Uint8Array): Uint8Array {
-    const ephemeralPk = ciphertext.slice(0, 32);
-    const box = ciphertext.slice(32);
+    const ephemeralPk = ciphertext.slice(0, NACL_EPHEMERAL_BOX_OVERHEAD);
+    const box = ciphertext.slice(NACL_EPHEMERAL_BOX_OVERHEAD);
     const nonce = deriveNonce(ephemeralPk, recipientPk);
     const result = nacl.box.open(box, nonce, ephemeralPk, recipientSk);
     if (result === null) {

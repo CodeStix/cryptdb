@@ -1,27 +1,49 @@
 import * as z from "zod";
+import nacl from "tweetnacl";
+import { NACL_EPHEMERAL_BOX_OVERHEAD } from "./crypto";
 
 export type ChallengeVerificationStatus = "ok" | "invalid-server-signature" | "challenge-expired" | "invalid-client-signature";
+
+function base64Length(byteCount: number): number {
+    return Math.ceil(byteCount / 3) * 4;
+}
+
+// function base64LengthNoPadding(byteCount: number): number {
+//     return Math.ceil((byteCount * 4) / 3);
+// }
+
+function specificBase64(minBytes: number, maxBytes?: number) {
+    // const unpadded = z
+    //     .base64url()
+    //     .min(base64LengthNoPadding(minBytes))
+    //     .max(base64LengthNoPadding(maxBytes ?? minBytes));
+
+    return z
+        .base64()
+        .min(base64Length(minBytes))
+        .max(base64Length(maxBytes ?? minBytes));
+}
 
 export const RegisterRequestSchema = z.xor([
     z.object({
         method: z.literal("publickey"),
         identifier: z.string(),
 
-        publicKey: z.base64(),
-        clientServerSignedChallenge: z.base64(),
+        publicKey: specificBase64(nacl.sign.publicKeyLength),
+        clientServerSignedChallenge: specificBase64(16, 128),
 
-        encryptedMasterKey: z.base64(),
-        encryptedMasterKeyNonce: z.base64(),
-        publicSignKey: z.base64(),
-        encryptedPrivateSignKey: z.base64(),
-        encryptedPrivateSignKeyNonce: z.base64(),
-        publicDataKey: z.base64(),
-        encryptedPrivateDataKey: z.base64(),
-        encryptedPrivateDataKeyNonce: z.base64(),
-        groupPublicKey: z.base64(),
-        groupEncryptedPrivateKey: z.base64(),
-        collectionPublicKey: z.base64(),
-        collectionEncryptedPrivateKey: z.base64(),
+        encryptedMasterKey: specificBase64(nacl.box.secretKeyLength + nacl.secretbox.overheadLength),
+        encryptedMasterKeyNonce: specificBase64(nacl.secretbox.nonceLength),
+        publicSignKey: specificBase64(nacl.sign.publicKeyLength),
+        encryptedPrivateSignKey: specificBase64(nacl.sign.secretKeyLength + nacl.secretbox.overheadLength),
+        encryptedPrivateSignKeyNonce: specificBase64(nacl.secretbox.nonceLength),
+        publicDataKey: specificBase64(nacl.sign.publicKeyLength),
+        encryptedPrivateDataKey: specificBase64(nacl.box.secretKeyLength + nacl.secretbox.overheadLength),
+        encryptedPrivateDataKeyNonce: specificBase64(nacl.secretbox.nonceLength),
+        groupPublicKey: specificBase64(nacl.sign.publicKeyLength),
+        groupEncryptedPrivateKey: specificBase64(nacl.box.secretKeyLength + nacl.box.overheadLength + NACL_EPHEMERAL_BOX_OVERHEAD),
+        collectionPublicKey: specificBase64(nacl.sign.publicKeyLength),
+        collectionEncryptedPrivateKey: specificBase64(nacl.box.secretKeyLength + nacl.box.overheadLength + NACL_EPHEMERAL_BOX_OVERHEAD),
     }),
     z.object({
         method: z.literal("password"),
@@ -29,18 +51,18 @@ export const RegisterRequestSchema = z.xor([
 
         password: z.string(),
 
-        encryptedMasterKey: z.base64(),
-        encryptedMasterKeyNonce: z.base64(),
-        publicSignKey: z.base64(),
-        encryptedPrivateSignKey: z.base64(),
-        encryptedPrivateSignKeyNonce: z.base64(),
-        publicDataKey: z.base64(),
-        encryptedPrivateDataKey: z.base64(),
-        encryptedPrivateDataKeyNonce: z.base64(),
-        groupPublicKey: z.base64(),
-        groupEncryptedPrivateKey: z.base64(),
-        collectionPublicKey: z.base64(),
-        collectionEncryptedPrivateKey: z.base64(),
+        encryptedMasterKey: specificBase64(nacl.box.secretKeyLength + nacl.secretbox.overheadLength),
+        encryptedMasterKeyNonce: specificBase64(nacl.secretbox.nonceLength),
+        publicSignKey: specificBase64(nacl.sign.publicKeyLength),
+        encryptedPrivateSignKey: specificBase64(nacl.sign.secretKeyLength + nacl.secretbox.overheadLength),
+        encryptedPrivateSignKeyNonce: specificBase64(nacl.secretbox.nonceLength),
+        publicDataKey: specificBase64(nacl.sign.publicKeyLength),
+        encryptedPrivateDataKey: specificBase64(nacl.box.secretKeyLength + nacl.secretbox.overheadLength),
+        encryptedPrivateDataKeyNonce: specificBase64(nacl.secretbox.nonceLength),
+        groupPublicKey: specificBase64(nacl.sign.publicKeyLength),
+        groupEncryptedPrivateKey: specificBase64(nacl.box.secretKeyLength + nacl.box.overheadLength + NACL_EPHEMERAL_BOX_OVERHEAD),
+        collectionPublicKey: specificBase64(nacl.sign.publicKeyLength),
+        collectionEncryptedPrivateKey: specificBase64(nacl.box.secretKeyLength + nacl.box.overheadLength + NACL_EPHEMERAL_BOX_OVERHEAD),
     }),
 ]);
 
@@ -72,15 +94,15 @@ export type GetChallengeResponse = {
 export const LoginRequestSchema = z.xor([
     z.object({
         method: z.literal("publickey"),
-        identifier: z.string(),
-        clientServerSignedChallenge: z.base64(),
+        identifier: z.string().min(8).max(64),
+        clientServerSignedChallenge: specificBase64(16, 128),
     }),
     z.object({
         method: z.literal("password"),
-        identifier: z.string(),
+        identifier: z.string().min(8).max(64),
         // password is actually derived from                PBKDF2(password, salt: username + "random pepper 1")
         // the real master key is actually encrypted with   PBKDF2(password, salt: username + "random pepper 2")
-        password: z.string(),
+        password: z.string().min(8).max(64),
     }),
 ]);
 

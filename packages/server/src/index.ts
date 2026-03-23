@@ -16,6 +16,7 @@ import * as z from "zod";
 import * as bcrypt from "bcrypt";
 import * as jwt from "jsonwebtoken";
 import nacl from "tweetnacl";
+import console from "console";
 
 const JWT_EXPIRE_IN = 18 * 60 * 60;
 
@@ -120,6 +121,7 @@ class CryptServer {
 
     private async parseBodyJsonValidated<T extends z.ZodType>(req: http.IncomingMessage, schema: T): Promise<z.infer<T>> {
         const json = await this.parseBodyJson(req);
+        console.log("json", json);
         return await schema.parseAsync(json);
     }
 
@@ -216,6 +218,7 @@ class CryptServer {
     }
 
     private async handleRegister(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<RegisterResponse> {
+        
         const json = await this.parseBodyJsonValidated(req, RegisterRequestSchema);
 
         const encryptedMasterKey = Buffer.from(json.encryptedMasterKey, "base64");

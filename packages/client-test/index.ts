@@ -4,7 +4,7 @@ console.log("testing client");
 
 const client = new CryptClient("TestingApp", "http://localhost:8080");
 
-// client.registerUsingPassword("stijnrogiest", "Vrijdag1@").then((v) => {
+// client.registerUsingPassword("stijnrogiest2", "Vrijdag1@").then((v) => {
 //     console.log("logged in", v);
 // });
 
