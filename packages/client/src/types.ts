@@ -8,18 +8,16 @@ export const RegisterRequestSchema = z.xor([
         identifier: z.string(),
 
         publicKey: z.base64(),
-        clientSignature: z.base64(),
-        serverSignature: z.base64(),
-        challenge: z.base64(),
+        clientServerSignedChallenge: z.base64(),
 
         encryptedMasterKey: z.base64(),
-        encryptedMasterKeyIV: z.base64(),
+        encryptedMasterKeyNonce: z.base64(),
         publicSignKey: z.base64(),
         encryptedPrivateSignKey: z.base64(),
-        encryptedPrivateSignKeyIV: z.base64(),
+        encryptedPrivateSignKeyNonce: z.base64(),
         publicDataKey: z.base64(),
         encryptedPrivateDataKey: z.base64(),
-        encryptedPrivateDataKeyIV: z.base64(),
+        encryptedPrivateDataKeyNonce: z.base64(),
         groupPublicKey: z.base64(),
         groupEncryptedPrivateKey: z.base64(),
         collectionPublicKey: z.base64(),
@@ -32,13 +30,13 @@ export const RegisterRequestSchema = z.xor([
         password: z.string(),
 
         encryptedMasterKey: z.base64(),
-        encryptedMasterKeyIV: z.base64(),
+        encryptedMasterKeyNonce: z.base64(),
         publicSignKey: z.base64(),
         encryptedPrivateSignKey: z.base64(),
-        encryptedPrivateSignKeyIV: z.base64(),
+        encryptedPrivateSignKeyNonce: z.base64(),
         publicDataKey: z.base64(),
         encryptedPrivateDataKey: z.base64(),
-        encryptedPrivateDataKeyIV: z.base64(),
+        encryptedPrivateDataKeyNonce: z.base64(),
         groupPublicKey: z.base64(),
         groupEncryptedPrivateKey: z.base64(),
         collectionPublicKey: z.base64(),
@@ -68,17 +66,14 @@ export type RegisterResponse =
 export type GetChallengeResponse = {
     //   status: "ok";
     //   challengeId: string;
-    challenge: string; // base64
-    serverSignature: string; // base64
+    serverSignedChallenge: string; // base64
 };
 
 export const LoginRequestSchema = z.xor([
     z.object({
         method: z.literal("publickey"),
         identifier: z.string(),
-        clientSignature: z.base64(),
-        serverSignature: z.base64(),
-        challenge: z.base64(),
+        clientServerSignedChallenge: z.base64(),
     }),
     z.object({
         method: z.literal("password"),
@@ -95,15 +90,15 @@ export type LoginResponse =
           token: string;
 
           encryptedMasterKey: string; // base64
-          encryptedMasterKeyIV: string; // base64
+          encryptedMasterKeyNonce: string; // base64
 
           // All private keys are encrypted with encryptedMasterKey
           publicSignKey: string; // base64
           encryptedPrivateSignKey: string; // base64
-          encryptedPrivateSignKeyIV: string; // base64
+          encryptedPrivateSignKeyNonce: string; // base64
           publicDataKey: string; // base64
           encryptedPrivateDataKey: string; // base64
-          encryptedPrivateDataKeyIV: string; // base64
+          encryptedPrivateDataKeyNonce: string; // base64
       }
     | {
           status: "unknown-credential";

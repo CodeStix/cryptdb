@@ -1,27 +1,8 @@
 import z from "zod";
 import { LoginRequestSchema, LoginResponse, RegisterRequestSchema, RegisterResponse } from "./types";
-import {
-    decodeBase64,
-    decryptAes,
-    deriveKey,
-    encodeBase64,
-    encryptAes,
-    encryptRsa,
-    exportAesKey,
-    exportRsaPrivateKey,
-    exportRsaPublicKey,
-    exportSignPrivateKey,
-    exportSignPublicKey,
-    generateAesKey,
-    generateRsaKeypair,
-    generateSignKeypair,
-    importAesKey,
-    importRsaPrivateKey,
-    importRsaPublicKey,
-    importSignPrivateKey,
-    importSignPublicKey,
-    textToBytes,
-} from "./crypto";
+import nacl from "tweetnacl";
+import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from "tweetnacl-util";
+import { naclBoxEphemeral, deriveKey } from "./crypto";
 
 export * from "./types";
 export * from "./crypto";
@@ -33,8 +14,8 @@ export class CryptClient {
     appName: string;
     url: string;
 
-    signKeyPair?: { public: CryptoKey; private: CryptoKey };
-    dataKeyPair?: { public: CryptoKey; private: CryptoKey };
+    signKeyPair?: { public: Uint8Array; private: Uint8Array };
+    dataKeyPair?: { public: Uint8Array; private: Uint8Array };
 
     constructor(appName: string, url: string) {
         this.appName = appName;
@@ -43,7 +24,7 @@ export class CryptClient {
 
     private async fetchJson<Req, Res>(method: string, path: string, body?: Req) {
         const res = await fetch(
-            this.url + "/login",
+            this.url + path,
             body
                 ? {
                       method: method,
@@ -64,21 +45,12 @@ export class CryptClient {
         return (await res.json()) as Res;
     }
 
-    textToSalt(str: string, length = 32) {
-        const salt = new Uint8Array(length);
-        const b = textToBytes(str);
-        for (let i = 0; i < b.length && i < length; i++) {
-            salt[i] = b[i]!;
-        }
-        return salt;
-    }
-
     getIdentifierDerivedSalt(identifier: string, prefix: string, length = 32) {
         if (prefix.length !== 2) {
             throw new Error("Prefix must be 2 characters");
         }
-        // Prefix + appname make up 8 characters of the salt, remaining 24 chars for identifier/username
-        return this.textToSalt(prefix + this.appName.substring(0, 6) + identifier, length);
+        const saltStr = prefix + this.appName + identifier;
+        return nacl.hash(decodeUTF8(saltStr)).slice(0, length);
     }
 
     async loginUsingPassword(identifier: string, password: string) {
@@ -87,14 +59,14 @@ export class CryptClient {
 
         console.log({ authenticationSalt, masterKeySalt: keySalt });
 
-        const passwordBytes = textToBytes(password);
-        const authPassword = await deriveKey(passwordBytes, authenticationSalt);
-        const keyPassword = await deriveKey(passwordBytes, keySalt);
+        const passwordBytes = decodeUTF8(password);
+        const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
+        const masterKeyPassword = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
 
         const res = await this.fetchJson<z.infer<typeof LoginRequestSchema>, LoginResponse>("POST", "/login", {
             method: "password",
             identifier: identifier,
-            password: encodeBase64(new Uint8Array(await exportAesKey(authPassword))),
+            password: encodeBase64(authPassword),
         });
 
         if (res.status !== "ok") {
@@ -102,19 +74,28 @@ export class CryptClient {
         }
 
         const encryptedMasterKey = decodeBase64(res.encryptedMasterKey);
-        const encryptedMasterKeyIV = decodeBase64(res.encryptedMasterKeyIV);
+        const encryptedMasterKeyNonce = decodeBase64(res.encryptedMasterKeyNonce);
 
-        const masterKey = await importAesKey(await decryptAes(encryptedMasterKey, encryptedMasterKeyIV, keyPassword));
+        const masterKey = nacl.secretbox.open(encryptedMasterKey, encryptedMasterKeyNonce, masterKeyPassword);
+        if (!masterKey) {
+            throw new Error("Could not decrypt master key");
+        }
 
-        const publicSignKey = await importSignPublicKey(decodeBase64(res.publicSignKey));
+        const publicSignKey = decodeBase64(res.publicSignKey);
         const encryptedPrivateSignKey = decodeBase64(res.encryptedPrivateSignKey);
-        const encryptedPrivateSignKeyIV = decodeBase64(res.encryptedPrivateSignKeyIV);
-        const privateSignKey = await importSignPrivateKey(await decryptAes(encryptedPrivateSignKey, encryptedPrivateSignKeyIV, masterKey));
+        const encryptedPrivateSignKeyNonce = decodeBase64(res.encryptedPrivateSignKeyNonce);
+        const privateSignKey = nacl.secretbox.open(encryptedPrivateSignKey, encryptedPrivateSignKeyNonce, masterKey);
+        if (!privateSignKey) {
+            throw new Error("Could not decrypt private sign key using master key");
+        }
 
-        const publicDataKey = await importRsaPublicKey(decodeBase64(res.publicDataKey));
+        const publicDataKey = decodeBase64(res.publicDataKey);
         const encryptedPrivateDataKey = decodeBase64(res.encryptedPrivateDataKey);
-        const encryptedPrivateDataKeyIV = decodeBase64(res.encryptedPrivateDataKeyIV);
-        const privateDataKey = await importRsaPrivateKey(await decryptAes(encryptedPrivateDataKey, encryptedPrivateDataKeyIV, masterKey));
+        const encryptedPrivateDataKeyNonce = decodeBase64(res.encryptedPrivateDataKeyNonce);
+        const privateDataKey = nacl.secretbox.open(encryptedPrivateDataKey, encryptedPrivateDataKeyNonce, masterKey);
+        if (!privateDataKey) {
+            throw new Error("Could not decrypt private data key using master key");
+        }
 
         this.signKeyPair = {
             private: privateSignKey,
@@ -137,58 +118,50 @@ export class CryptClient {
         const authenticationSalt = this.getIdentifierDerivedSalt(identifier, AUTH_SALT_PREFIX);
         const keySalt = this.getIdentifierDerivedSalt(identifier, KEY_SALT_PREFIX);
 
-        const passwordBytes = textToBytes(password);
-        const authPassword = await deriveKey(passwordBytes, authenticationSalt);
-        const keyPassword = await deriveKey(passwordBytes, keySalt);
+        const passwordBytes = decodeUTF8(password);
+        const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
+        const masterKeyPassword = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
 
-        const masterKey = await generateAesKey();
+        const masterKey = nacl.randomBytes(nacl.secretbox.keyLength);
 
-        const encryptedMasterKeyIV = crypto.getRandomValues(new Uint8Array(16));
-        const encryptedMasterKey = await encryptAes(await exportAesKey(masterKey), encryptedMasterKeyIV, keyPassword);
+        const encryptedMasterKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+        const encryptedMasterKey = nacl.secretbox(masterKey, encryptedMasterKeyNonce, masterKeyPassword);
 
-        const userKeypair = await generateRsaKeypair();
-        const userPublicKey = await exportRsaPublicKey(userKeypair.publicKey);
-        const userEncryptedPrivateKeyIV = crypto.getRandomValues(new Uint8Array(16));
-        const userEncryptedPrivateKey = await encryptAes(await exportRsaPrivateKey(userKeypair.privateKey), userEncryptedPrivateKeyIV, masterKey);
+        const userKeypair = nacl.box.keyPair();
+        const userEncryptedPrivateKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+        const userEncryptedPrivateKey = nacl.secretbox(userKeypair.secretKey, userEncryptedPrivateKeyNonce, masterKey);
 
-        const userSignKeypair = await generateSignKeypair();
-        const userSignPublicKey = await exportSignPublicKey(userSignKeypair.publicKey);
-        const userEncryptedPrivateSignKeyIV = crypto.getRandomValues(new Uint8Array(16));
-        const userEncryptedPrivateSignKey = await encryptAes(
-            await exportSignPrivateKey(userSignKeypair.privateKey),
-            userEncryptedPrivateSignKeyIV,
-            masterKey
-        );
+        const userSignKeypair = nacl.sign.keyPair();
+        const userEncryptedPrivateSignKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+        const userEncryptedPrivateSignKey = nacl.secretbox(userSignKeypair.secretKey, userEncryptedPrivateSignKeyNonce, masterKey);
 
-        const groupKeypair = await generateRsaKeypair();
-        const groupPublicKey = await exportRsaPublicKey(groupKeypair.publicKey);
-        const groupEncryptedPrivateKey = await encryptRsa(await exportRsaPrivateKey(groupKeypair.privateKey), userKeypair.publicKey);
+        const groupKeypair = nacl.box.keyPair();
+        const groupEncryptedPrivateKey = naclBoxEphemeral(groupKeypair.secretKey, userKeypair.publicKey);
 
-        const collectionKeypair = await generateRsaKeypair();
-        const collectionPublicKey = await exportRsaPublicKey(collectionKeypair.publicKey);
-        const collectionEncryptedPrivateKey = await encryptRsa(await exportRsaPrivateKey(collectionKeypair.privateKey), groupKeypair.publicKey);
+        const collectionKeypair = nacl.box.keyPair();
+        const collectionEncryptedPrivateKey = naclBoxEphemeral(collectionKeypair.secretKey, groupKeypair.publicKey);
 
         const res = await this.fetchJson<z.infer<typeof RegisterRequestSchema>, RegisterResponse>("POST", "/register", {
             method: "password",
             identifier: identifier,
-            password: encodeBase64(new Uint8Array(await exportAesKey(authPassword))),
+            password: encodeBase64(authPassword),
 
-            encryptedMasterKey: encodeBase64(new Uint8Array(encryptedMasterKey)),
-            encryptedMasterKeyIV: encodeBase64(encryptedMasterKeyIV),
+            encryptedMasterKey: encodeBase64(encryptedMasterKey),
+            encryptedMasterKeyNonce: encodeBase64(encryptedMasterKeyNonce),
 
-            publicDataKey: encodeBase64(new Uint8Array(userPublicKey)),
-            encryptedPrivateDataKey: encodeBase64(new Uint8Array(userEncryptedPrivateKey)),
-            encryptedPrivateDataKeyIV: encodeBase64(new Uint8Array(userEncryptedPrivateKeyIV)),
+            publicDataKey: encodeBase64(userKeypair.publicKey),
+            encryptedPrivateDataKey: encodeBase64(userEncryptedPrivateKey),
+            encryptedPrivateDataKeyNonce: encodeBase64(userEncryptedPrivateKeyNonce),
 
-            publicSignKey: encodeBase64(new Uint8Array(userSignPublicKey)),
-            encryptedPrivateSignKey: encodeBase64(new Uint8Array(userEncryptedPrivateSignKey)),
-            encryptedPrivateSignKeyIV: encodeBase64(new Uint8Array(userEncryptedPrivateSignKeyIV)),
+            publicSignKey: encodeBase64(userSignKeypair.publicKey),
+            encryptedPrivateSignKey: encodeBase64(userEncryptedPrivateSignKey),
+            encryptedPrivateSignKeyNonce: encodeBase64(userEncryptedPrivateSignKeyNonce),
 
-            groupPublicKey: encodeBase64(new Uint8Array(groupPublicKey)),
-            groupEncryptedPrivateKey: encodeBase64(new Uint8Array(groupEncryptedPrivateKey)),
+            groupPublicKey: encodeBase64(groupKeypair.publicKey),
+            groupEncryptedPrivateKey: encodeBase64(groupEncryptedPrivateKey),
 
-            collectionPublicKey: encodeBase64(new Uint8Array(collectionPublicKey)),
-            collectionEncryptedPrivateKey: encodeBase64(new Uint8Array(collectionEncryptedPrivateKey)),
+            collectionPublicKey: encodeBase64(collectionKeypair.publicKey),
+            collectionEncryptedPrivateKey: encodeBase64(collectionEncryptedPrivateKey),
         });
 
         if (res.status !== "ok") {
@@ -196,11 +169,11 @@ export class CryptClient {
         }
 
         this.signKeyPair = {
-            private: userSignKeypair.privateKey,
+            private: userSignKeypair.secretKey,
             public: userSignKeypair.publicKey,
         };
         this.dataKeyPair = {
-            private: userKeypair.privateKey,
+            private: userKeypair.secretKey,
             public: userKeypair.publicKey,
         };
 
