@@ -26,8 +26,8 @@ message ErrorResponse {
 message RegisterRequest {
 
     message RegisterKeyMaterial {
-      bytes encrypted_master_key = 1                [(buf.validate.field).bytes.len = 48];  // box.secretKeyLength(32) + secretbox.overheadLength(16)
-      bytes encrypted_master_key_nonce = 2          [(buf.validate.field).bytes.len = 24];  // secretbox.nonceLength
+    //   bytes encrypted_master_key = 1                [(buf.validate.field).bytes.len = 48];  // box.secretKeyLength(32) + secretbox.overheadLength(16)
+    //   bytes encrypted_master_key_nonce = 2          [(buf.validate.field).bytes.len = 24];  // secretbox.nonceLength
     
       bytes public_sign_key = 3                     [(buf.validate.field).bytes.len = 32];  // sign.publicKeyLength
       bytes encrypted_private_sign_key = 4          [(buf.validate.field).bytes.len = 80];  // sign.secretKeyLength(64) + secretbox.overheadLength(16)
@@ -116,10 +116,10 @@ message LoginResponse {
     message LoginResponseOkData {
         string token = 1;
         
-        bytes encrypted_master_key       = 2;
-        bytes encrypted_master_key_nonce = 3;
+        // bytes encrypted_master_key       = 2;
+        // bytes encrypted_master_key_nonce = 3;
         
-        // All private keys encrypted with master key
+        int32 version = 3;
         bytes public_sign_key                  = 4;
         bytes encrypted_private_sign_key       = 5;
         bytes encrypted_private_sign_key_nonce = 6;
@@ -129,6 +129,8 @@ message LoginResponse {
 
         uint64 personal_collection_id = 10;
         uint64 personal_group_id = 11;
+
+      
     }
 
     oneof response {

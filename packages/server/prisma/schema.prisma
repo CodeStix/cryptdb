@@ -13,20 +13,26 @@ datasource db {
 // INSERT INTO "TablePermission"("tableName", "groupId", "canDelete", "canInsert", "canQuery", "canRead", "canUpdate") VALUES('Profile', 2, true, true, true, true, true);
 
 model UserKey {
-  id                      BigInt @id @default(autoincrement())
-  identifier              String @unique // Contains username or credential id
-  method                  String // "password" or "publickey"
-  userId                  BigInt
-  user                    User   @relation(fields: [userId], references: [id])
+  id           BigInt @id @default(autoincrement())
+  identifier   String @unique // Contains username or credential id
+  method       String // "password" or "publickey"
+  userId       BigInt
+  user         User   @relation(fields: [userId], references: [id])
   // When method == "publickey"
-  publicKey               Bytes?
+  publicKey    Bytes?
   // When method == "password"
-  passwordHash            Bytes?
-  passwordSalt            Bytes?
-  // When method == "password"  -> contains master key encrypted with password-derived key (different password than stored in keyData)
-  // When method == "publickey" -> contains master key encrypted with public key
-  encryptedMasterKey      Bytes
-  encryptedMasterKeyNonce Bytes
+  passwordHash Bytes?
+  passwordSalt Bytes?
+
+  // When method == "password"  -> the following keys are encrypted with password-derived key (different password than stored in keyData)
+  // When method == "publickey" -> the following keys are encrypted with the keypair
+  version                      Int // Version of sign and data keys
+  publicSignKey                Bytes
+  encryptedPrivateSignKey      Bytes
+  encryptedPrivateSignKeyNonce Bytes
+  publicDataKey                Bytes
+  encryptedPrivateDataKey      Bytes
+  encryptedPrivateDataKeyNonce Bytes
 
   // @@unique([userId, method])
 }
@@ -40,14 +46,6 @@ model User {
   personalCollectionId BigInt     @unique
 
   tokenCounter Int @default(0)
-
-  // Encrypted with master key (stored in UserKey)
-  publicSignKey                Bytes
-  encryptedPrivateSignKey      Bytes
-  encryptedPrivateSignKeyNonce Bytes
-  publicDataKey                Bytes
-  encryptedPrivateDataKey      Bytes
-  encryptedPrivateDataKeyNonce Bytes
 
   groups        GroupUser[]
   userKeys      UserKey[]
@@ -81,7 +79,7 @@ model GroupUserKey {
   version                  Int
   publicKey                Bytes // TODO: stored public key in shared model (is reused for a lot of GroupUserKey)
   encryptedPrivateKey      Bytes // Encrypted using user public key
-  encryptedUsingKeyVersion Int // The private key is encrypted with this user keypair version
+  encryptedUsingKeyVersion Int // The private key is encrypted with this UserKey version
 
   @@id([userId, groupId, version])
 }

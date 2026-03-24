@@ -123,7 +123,7 @@ export class CryptClient {
 
         const passwordBytes = decodeUTF8(password);
         const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
-        const masterKeyPassword = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
+        const masterKey = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
 
         const res = await this.fetchProto("POST", "/login", LoginRequestSchema, LoginResponseSchema, {
             method: {
@@ -141,10 +141,10 @@ export class CryptClient {
 
         const okResponse = res.response.value!;
 
-        const masterKey = nacl.secretbox.open(okResponse.encryptedMasterKey, okResponse.encryptedMasterKeyNonce, masterKeyPassword);
-        if (!masterKey) {
-            throw new Error("Could not decrypt master key");
-        }
+        // const masterKey = nacl.secretbox.open(okResponse.encryptedMasterKey, okResponse.encryptedMasterKeyNonce, masterKey);
+        // if (!masterKey) {
+        //     throw new Error("Could not decrypt master key");
+        // }
 
         const privateSignKey = nacl.secretbox.open(okResponse.encryptedPrivateSignKey, okResponse.encryptedPrivateSignKeyNonce, masterKey);
         if (!privateSignKey) {
@@ -180,11 +180,11 @@ export class CryptClient {
         };
     }
 
-    generateNewCredential(password: Uint8Array): MessageInitShape<typeof RegisterRequest_RegisterKeyMaterialSchema> {
-        const masterKey = nacl.randomBytes(nacl.secretbox.keyLength);
+    generateNewCredential(masterKey: Uint8Array): MessageInitShape<typeof RegisterRequest_RegisterKeyMaterialSchema> {
+        // const masterKey = nacl.randomBytes(nacl.secretbox.keyLength);
 
-        const encryptedMasterKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
-        const encryptedMasterKey = nacl.secretbox(masterKey, encryptedMasterKeyNonce, password);
+        // const encryptedMasterKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+        // const encryptedMasterKey = nacl.secretbox(masterKey, encryptedMasterKeyNonce, password);
 
         const userKeypair = nacl.box.keyPair();
         const userEncryptedPrivateKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
@@ -201,8 +201,8 @@ export class CryptClient {
         const collectionEncryptedPrivateKey = naclBoxEphemeral(collectionKeypair.secretKey, groupKeypair.publicKey);
 
         return {
-            encryptedMasterKey: encryptedMasterKey,
-            encryptedMasterKeyNonce: encryptedMasterKeyNonce,
+            // encryptedMasterKey: encryptedMasterKey,
+            // encryptedMasterKeyNonce: encryptedMasterKeyNonce,
 
             publicDataKey: userKeypair.publicKey,
 
@@ -227,9 +227,9 @@ export class CryptClient {
 
         const passwordBytes = decodeUTF8(password);
         const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
-        const masterKeyPassword = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
+        const masterKey = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
 
-        const keys = this.generateNewCredential(masterKeyPassword);
+        const keys = this.generateNewCredential(masterKey);
 
         const res = await this.fetchProto("POST", "/register", RegisterRequestSchema, RegisterResponseSchema, {
             method: {

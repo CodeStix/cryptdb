@@ -382,13 +382,6 @@ class CryptServer {
 
             const user = await prisma.user.create({
                 data: {
-                    publicSignKey: keys.publicSignKey as Uint8Array<ArrayBuffer>,
-                    encryptedPrivateSignKey: keys.encryptedPrivateSignKey as Uint8Array<ArrayBuffer>,
-                    encryptedPrivateSignKeyNonce: keys.encryptedPrivateSignKeyNonce as Uint8Array<ArrayBuffer>,
-                    publicDataKey: keys.publicDataKey as Uint8Array<ArrayBuffer>,
-                    encryptedPrivateDataKey: keys.encryptedPrivateDataKey as Uint8Array<ArrayBuffer>,
-                    encryptedPrivateDataKeyNonce: keys.encryptedPrivateDataKeyNonce as Uint8Array<ArrayBuffer>,
-
                     personalGroupId: group.id,
                     personalCollectionId: collection.id,
                 },
@@ -466,8 +459,16 @@ class CryptServer {
 
                 await prisma.userKey.create({
                     data: {
-                        encryptedMasterKey: keys.encryptedMasterKey as Uint8Array<ArrayBuffer>,
-                        encryptedMasterKeyNonce: keys.encryptedMasterKeyNonce as Uint8Array<ArrayBuffer>,
+                        // encryptedMasterKey: keys.encryptedMasterKey as Uint8Array<ArrayBuffer>,
+                        // encryptedMasterKeyNonce: keys.encryptedMasterKeyNonce as Uint8Array<ArrayBuffer>,
+                        version: 1,
+                        publicSignKey: keys.publicSignKey as Uint8Array<ArrayBuffer>,
+                        encryptedPrivateSignKey: keys.encryptedPrivateSignKey as Uint8Array<ArrayBuffer>,
+                        encryptedPrivateSignKeyNonce: keys.encryptedPrivateSignKeyNonce as Uint8Array<ArrayBuffer>,
+                        publicDataKey: keys.publicDataKey as Uint8Array<ArrayBuffer>,
+                        encryptedPrivateDataKey: keys.encryptedPrivateDataKey as Uint8Array<ArrayBuffer>,
+                        encryptedPrivateDataKeyNonce: keys.encryptedPrivateDataKeyNonce as Uint8Array<ArrayBuffer>,
+
                         identifier: data.method.value.identifier,
                         method: "password",
                         passwordHash: hashedPassword as Uint8Array<ArrayBuffer>,
@@ -482,8 +483,14 @@ class CryptServer {
             } else if (data.method.case === "publicKey") {
                 await prisma.userKey.create({
                     data: {
-                        encryptedMasterKey: keys.encryptedMasterKey as Uint8Array<ArrayBuffer>,
-                        encryptedMasterKeyNonce: keys.encryptedMasterKeyNonce as Uint8Array<ArrayBuffer>,
+                        version: 1,
+                        publicSignKey: keys.publicSignKey as Uint8Array<ArrayBuffer>,
+                        encryptedPrivateSignKey: keys.encryptedPrivateSignKey as Uint8Array<ArrayBuffer>,
+                        encryptedPrivateSignKeyNonce: keys.encryptedPrivateSignKeyNonce as Uint8Array<ArrayBuffer>,
+                        publicDataKey: keys.publicDataKey as Uint8Array<ArrayBuffer>,
+                        encryptedPrivateDataKey: keys.encryptedPrivateDataKey as Uint8Array<ArrayBuffer>,
+                        encryptedPrivateDataKeyNonce: keys.encryptedPrivateDataKeyNonce as Uint8Array<ArrayBuffer>,
+
                         identifier: data.method.value.identifier,
                         method: "publicKey",
                         publicKey: data.method.value.publicKey as Uint8Array<ArrayBuffer>,
@@ -617,16 +624,18 @@ class CryptServer {
                 value: {
                     token: token,
 
-                    encryptedMasterKey: credential.encryptedMasterKey,
-                    encryptedMasterKeyNonce: credential.encryptedMasterKeyNonce,
+                    // encryptedMasterKey: credential.encryptedMasterKey,
+                    // encryptedMasterKeyNonce: credential.encryptedMasterKeyNonce,
 
-                    publicSignKey: credential.user.publicSignKey,
-                    encryptedPrivateSignKey: credential.user.encryptedPrivateSignKey,
-                    encryptedPrivateSignKeyNonce: credential.user.encryptedPrivateSignKeyNonce,
+                    version: credential.version,
 
-                    publicDataKey: credential.user.publicDataKey,
-                    encryptedPrivateDataKey: credential.user.encryptedPrivateDataKey,
-                    encryptedPrivateDataKeyNonce: credential.user.encryptedPrivateDataKeyNonce,
+                    publicSignKey: credential.publicSignKey,
+                    encryptedPrivateSignKey: credential.encryptedPrivateSignKey,
+                    encryptedPrivateSignKeyNonce: credential.encryptedPrivateSignKeyNonce,
+
+                    publicDataKey: credential.publicDataKey,
+                    encryptedPrivateDataKey: credential.encryptedPrivateDataKey,
+                    encryptedPrivateDataKeyNonce: credential.encryptedPrivateDataKeyNonce,
 
                     personalCollectionId: credential.user.personalCollectionId,
                     personalGroupId: credential.user.personalGroupId,
