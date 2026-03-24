@@ -347,9 +347,7 @@ class CryptServer {
             };
         }
 
-        if (data.method.case === "password") {
-            // ...
-        } else if (data.method.case === "publicKey") {
+        if (data.method.case === "publicKey") {
             const clientServerSignedChallenge = data.method.value.clientServerSignedChallenge;
             const publicChallengeKey = data.method.value.publicKey;
 
@@ -449,38 +447,7 @@ class CryptServer {
                 },
             });
 
-            if (data.method.case === "password") {
-                const password = data.method.value.password;
-
-                const passwordSalt = crypto.getRandomValues(new Uint8Array(32));
-                const hashedPassword = await this.hashPassword(password, passwordSalt);
-
-                console.log("identifier", data.method.value.identifier);
-
-                await prisma.userKey.create({
-                    data: {
-                        // encryptedMasterKey: keys.encryptedMasterKey as Uint8Array<ArrayBuffer>,
-                        // encryptedMasterKeyNonce: keys.encryptedMasterKeyNonce as Uint8Array<ArrayBuffer>,
-                        version: 1,
-                        publicSignKey: keys.publicSignKey as Uint8Array<ArrayBuffer>,
-                        encryptedPrivateSignKey: keys.encryptedPrivateSignKey as Uint8Array<ArrayBuffer>,
-                        encryptedPrivateSignKeyNonce: keys.encryptedPrivateSignKeyNonce as Uint8Array<ArrayBuffer>,
-                        publicDataKey: keys.publicDataKey as Uint8Array<ArrayBuffer>,
-                        encryptedPrivateDataKey: keys.encryptedPrivateDataKey as Uint8Array<ArrayBuffer>,
-                        encryptedPrivateDataKeyNonce: keys.encryptedPrivateDataKeyNonce as Uint8Array<ArrayBuffer>,
-
-                        identifier: data.method.value.identifier,
-                        method: "password",
-                        passwordHash: hashedPassword as Uint8Array<ArrayBuffer>,
-                        passwordSalt: passwordSalt,
-                        user: {
-                            connect: {
-                                id: user.id,
-                            },
-                        },
-                    },
-                });
-            } else if (data.method.case === "publicKey") {
+            if (data.method.case === "publicKey") {
                 await prisma.userKey.create({
                     data: {
                         version: 1,
@@ -521,9 +488,9 @@ class CryptServer {
         };
     }
 
-    private async hashPassword(password: Uint8Array, salt: Uint8Array) {
-        return await deriveKey(password, salt, 32, 100000);
-    }
+    // private async hashPassword(password: Uint8Array, salt: Uint8Array) {
+    //     return await deriveKey(password, salt, 32, 100000);
+    // }
 
     private async verifyChallenge(clientServerSignedChallenge: Uint8Array, clientPublicKey: Uint8Array): Promise<ErrorCode | undefined> {
         const serverSignedChallenge = nacl.sign.open(clientServerSignedChallenge, clientPublicKey);
@@ -603,14 +570,6 @@ class CryptServer {
                         },
                     },
                 };
-            }
-        } else if (credential.method === "password" && data.method.case === "password") {
-            const password = data.method.value.password;
-
-            const hashedPassword = new Uint8Array(await this.hashPassword(password, credential.passwordSalt!));
-
-            if (Buffer.compare(credential.passwordHash!, hashedPassword) != 0) {
-                return { response: { case: "error", value: { errorCode: ErrorCode.WRONG_PASSWORD } } };
             }
         } else {
             return { response: { case: "error", value: { errorCode: ErrorCode.INVALID_METHOD } } };

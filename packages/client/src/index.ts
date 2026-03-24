@@ -203,44 +203,52 @@ export class CryptClient {
         };
     }
 
-    generateNewCredential(masterKey: Uint8Array): MessageInitShape<typeof RegisterRequest_RegisterKeyMaterialSchema> {
+    generateNewCredential(masterKey: Uint8Array): {
+        userSignKeyPair: nacl.SignKeyPair;
+        userKeyPair: nacl.BoxKeyPair;
+        keys: MessageInitShape<typeof RegisterRequest_RegisterKeyMaterialSchema>;
+    } {
         // const masterKey = nacl.randomBytes(nacl.secretbox.keyLength);
 
         // const encryptedMasterKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
         // const encryptedMasterKey = nacl.secretbox(masterKey, encryptedMasterKeyNonce, password);
 
-        const userKeypair = nacl.box.keyPair();
+        const userKeyPair = nacl.box.keyPair();
         const userEncryptedPrivateKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
-        const userEncryptedPrivateKey = nacl.secretbox(userKeypair.secretKey, userEncryptedPrivateKeyNonce, masterKey);
+        const userEncryptedPrivateKey = nacl.secretbox(userKeyPair.secretKey, userEncryptedPrivateKeyNonce, masterKey);
 
-        const userSignKeypair = nacl.sign.keyPair();
+        const userSignKeyPair = nacl.sign.keyPair();
         const userEncryptedPrivateSignKeyNonce = nacl.randomBytes(nacl.secretbox.nonceLength);
-        const userEncryptedPrivateSignKey = nacl.secretbox(userSignKeypair.secretKey, userEncryptedPrivateSignKeyNonce, masterKey);
+        const userEncryptedPrivateSignKey = nacl.secretbox(userSignKeyPair.secretKey, userEncryptedPrivateSignKeyNonce, masterKey);
 
-        const groupKeypair = nacl.box.keyPair();
-        const groupEncryptedPrivateKey = naclBoxEphemeral(groupKeypair.secretKey, userKeypair.publicKey);
+        const groupKeyPair = nacl.box.keyPair();
+        const groupEncryptedPrivateKey = naclBoxEphemeral(groupKeyPair.secretKey, userKeyPair.publicKey);
 
-        const collectionKeypair = nacl.box.keyPair();
-        const collectionEncryptedPrivateKey = naclBoxEphemeral(collectionKeypair.secretKey, groupKeypair.publicKey);
+        const collectionKeyPair = nacl.box.keyPair();
+        const collectionEncryptedPrivateKey = naclBoxEphemeral(collectionKeyPair.secretKey, groupKeyPair.publicKey);
 
         return {
-            // encryptedMasterKey: encryptedMasterKey,
-            // encryptedMasterKeyNonce: encryptedMasterKeyNonce,
+            userKeyPair: userKeyPair,
+            userSignKeyPair: userSignKeyPair,
+            keys: {
+                // encryptedMasterKey: encryptedMasterKey,
+                // encryptedMasterKeyNonce: encryptedMasterKeyNonce,
 
-            publicDataKey: userKeypair.publicKey,
+                publicDataKey: userKeyPair.publicKey,
 
-            encryptedPrivateDataKey: userEncryptedPrivateKey,
-            encryptedPrivateDataKeyNonce: userEncryptedPrivateKeyNonce,
+                encryptedPrivateDataKey: userEncryptedPrivateKey,
+                encryptedPrivateDataKeyNonce: userEncryptedPrivateKeyNonce,
 
-            publicSignKey: userSignKeypair.publicKey,
-            encryptedPrivateSignKey: userEncryptedPrivateSignKey,
-            encryptedPrivateSignKeyNonce: userEncryptedPrivateSignKeyNonce,
+                publicSignKey: userSignKeyPair.publicKey,
+                encryptedPrivateSignKey: userEncryptedPrivateSignKey,
+                encryptedPrivateSignKeyNonce: userEncryptedPrivateSignKeyNonce,
 
-            groupPublicKey: groupKeypair.publicKey,
-            groupEncryptedPrivateKey: groupEncryptedPrivateKey,
+                groupPublicKey: groupKeyPair.publicKey,
+                groupEncryptedPrivateKey: groupEncryptedPrivateKey,
 
-            collectionPublicKey: collectionKeypair.publicKey,
-            collectionEncryptedPrivateKey: collectionEncryptedPrivateKey,
+                collectionPublicKey: collectionKeyPair.publicKey,
+                collectionEncryptedPrivateKey: collectionEncryptedPrivateKey,
+            },
         };
     }
 
@@ -249,10 +257,10 @@ export class CryptClient {
         const masterKeySalt = this.getIdentifierDerivedSalt(identifier, KEY_SALT_PREFIX);
 
         const passwordBytes = decodeUTF8(password);
-        const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
+        const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.sign.seedLength);
         const masterKey = await deriveKey(passwordBytes, masterKeySalt, nacl.secretbox.keyLength);
 
-        const keys = this.generateNewCredential(masterKey);
+        const { userKeyPair, userSignKeyPair, keys } = this.generateNewCredential(masterKey);
         const { clientServerSignedChallenge, publicKey } = await this.fetchChallengeAndSign(authPassword);
 
         const res = await this.fetchProto("POST", "/register", RegisterRequestSchema, RegisterResponseSchema, {
@@ -271,14 +279,14 @@ export class CryptClient {
             throw new Error("Error during registration: " + res.response.value!.errorCode);
         }
 
-        // this.signKeyPair = {
-        //     private: userSignKeypair.secretKey,
-        //     public: userSignKeypair.publicKey,
-        // };
-        // this.dataKeyPair = {
-        //     private: userKeypair.secretKey,
-        //     public: userKeypair.publicKey,
-        // };
+        this.signKeyPair = {
+            private: userSignKeyPair.secretKey,
+            public: userSignKeyPair.publicKey,
+        };
+        this.dataKeyPair = {
+            private: userKeyPair.secretKey,
+            public: userKeyPair.publicKey,
+        };
 
         this.token = res.response.value.token;
 

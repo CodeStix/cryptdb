@@ -51,16 +51,16 @@ message RegisterRequest {
         RegisterKeyMaterial keys = 4              [(buf.validate.field).required = true];
     }
     
-    message PasswordRegisterRequest {
-        string identifier = 1           [(buf.validate.field).string.min_len = 1];
-        bytes password = 2              [(buf.validate.field).bytes.len = 32];
-        RegisterKeyMaterial keys = 3    [(buf.validate.field).required = true];
-    }
+    // message PasswordRegisterRequest {
+    //     string identifier = 1           [(buf.validate.field).string.min_len = 1];
+    //     bytes password = 2              [(buf.validate.field).bytes.len = 32];
+    //     RegisterKeyMaterial keys = 3    [(buf.validate.field).required = true];
+    // }
 
     oneof method {
         option (buf.validate.oneof).required = true;
         PublicKeyRegisterRequest public_key = 1;
-        PasswordRegisterRequest  password   = 2;
+        // PasswordRegisterRequest  password   = 2;
     }
 }
 
@@ -100,15 +100,15 @@ message LoginRequest {
         bytes client_server_signed_challenge = 2      [(buf.validate.field).bytes.len = 160]; // 32 + 64 + 64
     }
     
-    message PasswordLoginRequest {
-        string identifier = 1         [(buf.validate.field).string.min_len = 8, (buf.validate.field).string.max_len = 64];
-        bytes password = 2            [(buf.validate.field).bytes.len = 32];
-    }
+    // message PasswordLoginRequest {
+    //     string identifier = 1         [(buf.validate.field).string.min_len = 8, (buf.validate.field).string.max_len = 64];
+    //     bytes password = 2            [(buf.validate.field).bytes.len = 32];
+    // }
 
     oneof method {
         option (buf.validate.oneof).required = true;
         PublicKeyLoginRequest public_key = 1;
-        PasswordLoginRequest  password   = 2;
+        // PasswordLoginRequest  password   = 2;
     }
 }
 
