@@ -364,7 +364,7 @@ class CryptServer {
             }
         }
 
-        const user = await this.prisma.$transaction(async (prisma) => {
+        const [user, group, collection] = await this.prisma.$transaction(async (prisma) => {
             const group = await prisma.group.create({
                 data: {
                     name: "PersonalGroup",
@@ -471,7 +471,7 @@ class CryptServer {
                 });
             }
 
-            return user;
+            return [user, group, collection];
         });
 
         const token = this.createAccessToken(user.id, user.tokenCounter);
@@ -483,6 +483,8 @@ class CryptServer {
                 case: "ok",
                 value: {
                     token: token,
+                    personalCollectionId: collection.id,
+                    personalGroupId: group.id,
                 },
             },
         };

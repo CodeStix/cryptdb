@@ -67,6 +67,8 @@ message RegisterRequest {
 message RegisterResponse {
     message RegisterOkResponse {
         string token = 1;   
+        uint64 personal_collection_id = 2;
+        uint64 personal_group_id = 3;
     }
 
     oneof response {
@@ -129,8 +131,6 @@ message LoginResponse {
 
         uint64 personal_collection_id = 10;
         uint64 personal_group_id = 11;
-
-      
     }
 
     oneof response {
@@ -139,7 +139,7 @@ message LoginResponse {
     }
 }
 
-message Collection {
+message CollectionResponse {
     message CollectionGroup {
         uint64 group_id = 1;
         bool can_add = 2;
@@ -169,10 +169,10 @@ message GetCollectionRequest {
 }
 
 message GetCollectionResponse {
-    Collection collection = 1;
+    CollectionResponse collection = 1;
 }
 
-message Group {
+message GroupResponse {
     message GroupUser {
         uint64 user_id = 1;
         string role = 2;
@@ -198,10 +198,10 @@ message GetGroupRequest {
 }
 
 message GetGroupResponse {
-    Group group = 1;
+    GroupResponse group = 1;
 }
 
-message Object {
+message ObjectResponse {
     message Key {
         uint64 collection_id = 1;
         int32 encrypted_using_key_version = 2;
@@ -220,5 +220,5 @@ message GetObjectRequest {
 }
 
 message GetObjectResponse {
-    Object object = 1;
+    ObjectResponse object = 1;
 }

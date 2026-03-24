@@ -2,9 +2,9 @@ import z from "zod";
 import {} from "./types";
 import nacl from "tweetnacl";
 import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from "tweetnacl-util";
-import { naclBoxEphemeral, deriveKey } from "./crypto";
+import { naclBoxEphemeral, deriveKey, naclBoxEphemeralOpen } from "./crypto";
 import {
-    Collection,
+    CollectionResponse,
     ErrorCode,
     GetChallengeRequestSchema,
     GetChallengeResponseSchema,
@@ -14,7 +14,7 @@ import {
     GetGroupResponseSchema,
     GetObjectRequestSchema,
     GetObjectResponseSchema,
-    Group,
+    GroupResponse,
     LoginRequest,
     LoginRequestSchema,
     LoginResponse,
@@ -25,6 +25,7 @@ import {
     RegisterResponseSchema,
 } from "./generated/protocol_pb";
 import { create, DescMessage, fromBinary, MessageInitShape, MessageShape, toBinary } from "@bufbuild/protobuf";
+import en from "zod/v4/locales/en.js";
 
 export * from "./types";
 export * from "./crypto";
@@ -32,6 +33,160 @@ export * from "./generated/protocol_pb";
 
 const AUTH_SALT_PREFIX = "ap";
 const KEY_SALT_PREFIX = "mk";
+
+type KeyPair = {
+    version: number;
+    private: Uint8Array;
+    public: Uint8Array;
+};
+
+export class Group {
+    readonly id: GroupId;
+
+    private client: CryptClient;
+    private data!: GroupResponse;
+    private cachedKeys = new Map<number, KeyPair>();
+
+    constructor(client: CryptClient, id: GroupId) {
+        this.client = client;
+        this.id = id;
+    }
+
+    hasKey(version: number) {
+        return this.data.keys.some((e) => e.version === version);
+    }
+
+    async refresh() {
+        const res = await this.client.fetchProto("POST", "/group", GetGroupRequestSchema, GetGroupResponseSchema, {
+            id: BigInt(this.id),
+        });
+
+        if (!res.group) {
+            console.error("Refresh failed, empty response");
+            return;
+        }
+
+        this.data = res.group;
+    }
+
+    async getKey(version: number): Promise<KeyPair | null> {
+        const cachedKey = this.cachedKeys.get(version);
+        if (cachedKey) {
+            return cachedKey;
+        }
+
+        const userKeyPair = await this.client.getKey();
+        if (!userKeyPair) {
+            console.log("User key pair unavailable");
+            return null;
+        }
+
+        let encryptedKey = this.data.keys.find((e) => e.version === version && e.encryptedUsingKeyVersion === userKeyPair.version);
+        if (!encryptedKey) {
+            await this.refresh();
+
+            encryptedKey = this.data.keys.find((e) => e.version === version && e.encryptedUsingKeyVersion === userKeyPair.version);
+            if (!encryptedKey) {
+                console.error("Key with version not found", version, userKeyPair.version, this.data.keys);
+                return null;
+            }
+        }
+
+        const groupPublicKey = encryptedKey.publicKey;
+        const groupPrivateKey = naclBoxEphemeralOpen(encryptedKey.encryptedPrivateKey, userKeyPair.public, userKeyPair.private);
+        if (!groupPrivateKey) {
+            console.error("Could not decrypt group key", version, encryptedKey);
+            return null;
+        }
+
+        const keyPair: KeyPair = {
+            version: version,
+            public: groupPublicKey,
+            private: groupPrivateKey,
+        };
+
+        this.cachedKeys.set(version, keyPair);
+
+        return keyPair;
+    }
+}
+
+export class Collection {
+    readonly id: CollectionId;
+
+    private client: CryptClient;
+    private data!: CollectionResponse;
+    private cachedKeys = new Map<number, KeyPair>();
+
+    constructor(client: CryptClient, id: CollectionId) {
+        this.client = client;
+        this.id = id;
+    }
+
+    hasKey(version: number) {
+        return this.data.keys.some((e) => e.version === version);
+    }
+
+    async refresh() {
+        const res = await this.client.fetchProto("POST", "/collection", GetCollectionRequestSchema, GetCollectionResponseSchema, {
+            id: BigInt(this.id),
+        });
+
+        if (!res.collection) {
+            console.error("Refresh failed, empty response");
+            return;
+        }
+
+        this.data = res.collection;
+    }
+
+    async getKey(version: number): Promise<KeyPair | null> {
+        const cachedKey = this.cachedKeys.get(version);
+        if (cachedKey) {
+            return cachedKey;
+        }
+
+        let encryptedKey = this.data.keys.find((e) => e.version === version);
+        if (!encryptedKey) {
+            await this.refresh();
+
+            encryptedKey = this.data.keys.find((e) => e.version === version);
+            if (!encryptedKey) {
+                console.log("No encrypted collection key found", this.data);
+                return null;
+            }
+        }
+
+        const group = await this.client.getGroup(encryptedKey.groupId);
+        if (!group) {
+            console.log("Collection group not found", this.data, encryptedKey);
+            return null;
+        }
+
+        const groupKeyPair = await group.getKey(encryptedKey.encryptedUsingKeyVersion);
+        if (!groupKeyPair) {
+            console.log("Could not find group keypair", this.data, encryptedKey);
+            return null;
+        }
+
+        const collectionPublicKey = encryptedKey.publicKey;
+        const collectionPrivateKey = naclBoxEphemeralOpen(encryptedKey.encryptedPrivateKey, groupKeyPair.public, groupKeyPair.private);
+        if (!collectionPrivateKey) {
+            console.error("Could not decrypt collection key", this.data, encryptedKey);
+            return null;
+        }
+
+        const keyPair: KeyPair = {
+            version: version,
+            public: collectionPublicKey,
+            private: collectionPrivateKey,
+        };
+
+        this.cachedKeys.set(version, keyPair);
+
+        return keyPair;
+    }
+}
 
 export class CryptClient {
     appName: string;
@@ -42,6 +197,9 @@ export class CryptClient {
 
     signKeyPair?: { public: Uint8Array; private: Uint8Array };
     dataKeyPair?: { public: Uint8Array; private: Uint8Array };
+    personalCollectionId?: CollectionId;
+    personalGroupId?: GroupId;
+    keyVersion?: number;
 
     constructor(appName: string, url: string) {
         this.appName = appName;
@@ -49,7 +207,7 @@ export class CryptClient {
         this.token = undefined;
     }
 
-    private async fetchProto<Req extends DescMessage, Res extends DescMessage>(
+    public async fetchProto<Req extends DescMessage, Res extends DescMessage>(
         method: string,
         path: string,
         requestSchema: Req,
@@ -84,6 +242,18 @@ export class CryptClient {
         const parsed = fromBinary(responseSchema, bytes);
 
         return parsed;
+    }
+
+    public async getKey(): Promise<KeyPair | null> {
+        if (!this.dataKeyPair) {
+            return null;
+        }
+
+        return {
+            version: this.keyVersion!,
+            private: this.dataKeyPair.private,
+            public: this.dataKeyPair.public,
+        };
     }
 
     private async fetchJson<Req, Res>(method: string, path: string, body?: Req) {
@@ -180,6 +350,9 @@ export class CryptClient {
         }
 
         this.token = okResponse.token;
+        this.keyVersion = okResponse.version;
+        this.personalCollectionId = okResponse.personalCollectionId;
+        this.personalGroupId = okResponse.personalGroupId;
 
         this.signKeyPair = {
             private: privateSignKey,
@@ -197,10 +370,10 @@ export class CryptClient {
             publicDataKey: okResponse.publicDataKey,
         });
 
-        return {
-            personalCollectionId: okResponse.personalCollectionId,
-            personalGroupId: okResponse.personalGroupId,
-        };
+        // return {
+        //     personalCollectionId: okResponse.personalCollectionId,
+        //     personalGroupId: okResponse.personalGroupId,
+        // };
     }
 
     generateNewCredential(masterKey: Uint8Array): {
@@ -279,6 +452,10 @@ export class CryptClient {
             throw new Error("Error during registration: " + res.response.value!.errorCode);
         }
 
+        this.keyVersion = 1;
+        this.personalCollectionId = res.response.value.personalCollectionId;
+        this.personalGroupId = res.response.value.personalGroupId;
+
         this.signKeyPair = {
             private: userSignKeyPair.secretKey,
             public: userSignKeyPair.publicKey,
@@ -293,64 +470,56 @@ export class CryptClient {
         console.log("Register ok", res.response.value.token);
     }
 
-    async getCollection(id: CollectionId, requireKeyVersion?: number) {
-        const cachedCollection = this.cachedCollections.get(id);
-        if (cachedCollection && (requireKeyVersion === undefined || cachedCollection.keys.some((e) => e.version === requireKeyVersion))) {
-            return cachedCollection;
-        }
-
-        const res = await this.fetchProto("POST", "/collection", GetCollectionRequestSchema, GetCollectionResponseSchema, {
-            id: BigInt(id),
-        });
-        if (!res.collection) {
-            return null;
-        }
-
-        this.cachedCollections.set(id, res.collection);
-
-        if (requireKeyVersion !== undefined && !res.collection.keys.some((e) => e.version === requireKeyVersion)) {
-            console.error(
-                "The requested key version doesn't exist anymore for collection. This shouldn't happen and indicates a wrong deletion of keys on the server.",
-                id,
-                requireKeyVersion
-            );
-            return null;
-        }
-
-        return res.collection;
-    }
-
-    async getGroup(id: GroupId, requireKeyVersion?: number): Promise<Group | null> {
+    async getGroup(id: GroupId): Promise<Group | null> {
         const cachedGroup = this.cachedGroups.get(id);
-        if (cachedGroup && (requireKeyVersion === undefined || cachedGroup.keys.some((e) => e.version === requireKeyVersion))) {
+        if (cachedGroup) {
             return cachedGroup;
         }
 
-        const res = await this.fetchProto("POST", "/group", GetGroupRequestSchema, GetGroupResponseSchema, {
-            id: BigInt(id),
-        });
-        if (!res.group) {
-            return null;
+        const newGroup = new Group(this, id);
+        await newGroup.refresh();
+        return newGroup;
+    }
+
+    async getCollection(id: CollectionId) {
+        const cachedCollection = this.cachedCollections.get(id);
+        if (cachedCollection) {
+            return cachedCollection;
         }
 
-        this.cachedGroups.set(id, res.group);
-
-        if (requireKeyVersion !== undefined && !res.group.keys.some((e) => e.version === requireKeyVersion)) {
-            console.error(
-                "The requested key version doesn't exist anymore for group. This shouldn't happen and indicates a wrong deletion of keys on the server.",
-                id,
-                requireKeyVersion
-            );
-            return null;
-        }
-
-        return res.group;
+        const collection = new Collection(this, id);
+        await collection.refresh();
+        return collection;
     }
 
     async getObject(id: ObjectId) {
         const res = await this.fetchProto("POST", "/object", GetObjectRequestSchema, GetObjectResponseSchema, {
             id: BigInt(id),
         });
+
+        if (!res.object) {
+            return null;
+        }
+
+        const encryptedKey = res.object.keys[0];
+        if (!encryptedKey) {
+            console.error("Object encryptedKey is empty");
+            return null;
+        }
+
+        const collection = await this.getCollection(encryptedKey.collectionId);
+        if (!collection) {
+            console.error("Collection for object not found", id, encryptedKey);
+            return;
+        }
+
+        const keyPair = await collection.getKey(encryptedKey.encryptedUsingKeyVersion);
+        if (!keyPair) {
+            console.error("Keypair for object not found", id, encryptedKey, collection);
+            return;
+        }
+
+        const objectKey = naclBoxEphemeralOpen(encryptedKey.encryptedObjectKey, keyPair.public, keyPair.private);
 
         return res.object;
     }
