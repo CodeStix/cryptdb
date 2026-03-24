@@ -6,6 +6,8 @@ import { naclBoxEphemeral, deriveKey } from "./crypto";
 import {
     Collection,
     ErrorCode,
+    GetChallengeRequestSchema,
+    GetChallengeResponseSchema,
     GetCollectionRequestSchema,
     GetCollectionResponseSchema,
     GetGroupRequestSchema,
@@ -115,22 +117,41 @@ export class CryptClient {
         return nacl.hash(decodeUTF8(saltStr)).slice(0, length);
     }
 
+    async fetchChallenge() {
+        const challenge = await this.fetchProto("GET", "/challenge", GetChallengeRequestSchema, GetChallengeResponseSchema, {});
+        if (challenge.response.case !== "ok") {
+            throw new Error("Could not fetch challenge");
+        }
+        return challenge.response.value.serverSignedChallenge;
+    }
+
+    async fetchChallengeAndSign(authPassword: Uint8Array) {
+        const challengeSignKeypair = nacl.sign.keyPair.fromSeed(authPassword);
+
+        const serverSignedChallenge = await this.fetchChallenge();
+
+        const clientServerSignedChallenge = nacl.sign(serverSignedChallenge, challengeSignKeypair.secretKey);
+
+        return { clientServerSignedChallenge, publicKey: challengeSignKeypair.publicKey };
+    }
+
     async loginUsingPassword(identifier: string, password: string) {
         const authenticationSalt = this.getIdentifierDerivedSalt(identifier, AUTH_SALT_PREFIX);
-        const keySalt = this.getIdentifierDerivedSalt(identifier, KEY_SALT_PREFIX);
+        const masterKeySalt = this.getIdentifierDerivedSalt(identifier, KEY_SALT_PREFIX);
 
-        console.log({ authenticationSalt, masterKeySalt: keySalt });
+        console.log({ authenticationSalt, masterKeySalt: masterKeySalt });
 
         const passwordBytes = decodeUTF8(password);
-        const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
-        const masterKey = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
+        const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.sign.seedLength);
+
+        const { clientServerSignedChallenge } = await this.fetchChallengeAndSign(authPassword);
 
         const res = await this.fetchProto("POST", "/login", LoginRequestSchema, LoginResponseSchema, {
             method: {
-                case: "password",
+                case: "publicKey",
                 value: {
                     identifier: identifier,
-                    password: authPassword,
+                    clientServerSignedChallenge: clientServerSignedChallenge,
                 },
             },
         });
@@ -145,6 +166,8 @@ export class CryptClient {
         // if (!masterKey) {
         //     throw new Error("Could not decrypt master key");
         // }
+
+        const masterKey = await deriveKey(passwordBytes, masterKeySalt, nacl.secretbox.keyLength);
 
         const privateSignKey = nacl.secretbox.open(okResponse.encryptedPrivateSignKey, okResponse.encryptedPrivateSignKeyNonce, masterKey);
         if (!privateSignKey) {
@@ -223,20 +246,22 @@ export class CryptClient {
 
     async registerUsingPassword(identifier: string, password: string) {
         const authenticationSalt = this.getIdentifierDerivedSalt(identifier, AUTH_SALT_PREFIX);
-        const keySalt = this.getIdentifierDerivedSalt(identifier, KEY_SALT_PREFIX);
+        const masterKeySalt = this.getIdentifierDerivedSalt(identifier, KEY_SALT_PREFIX);
 
         const passwordBytes = decodeUTF8(password);
         const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
-        const masterKey = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
+        const masterKey = await deriveKey(passwordBytes, masterKeySalt, nacl.secretbox.keyLength);
 
         const keys = this.generateNewCredential(masterKey);
+        const { clientServerSignedChallenge, publicKey } = await this.fetchChallengeAndSign(authPassword);
 
         const res = await this.fetchProto("POST", "/register", RegisterRequestSchema, RegisterResponseSchema, {
             method: {
-                case: "password",
+                case: "publicKey",
                 value: {
                     identifier: identifier,
-                    password: authPassword,
+                    clientServerSignedChallenge: clientServerSignedChallenge,
+                    publicKey: publicKey,
                     keys: keys,
                 },
             },

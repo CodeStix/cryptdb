@@ -277,7 +277,7 @@ class CryptServer {
 
     private async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         switch (url.pathname) {
-            case "/get-challenge": {
+            case "/challenge": {
                 this.ensureHttpMethod(req, "GET");
                 this.respondWithProto(res, GetChallengeResponseSchema, await this.handleGetChallenge(url, req, res));
                 break;

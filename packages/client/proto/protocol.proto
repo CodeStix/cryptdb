@@ -47,7 +47,7 @@ message RegisterRequest {
     message PublicKeyRegisterRequest {
         string identifier = 1                     [(buf.validate.field).string.min_len = 1];
         bytes public_key = 2                      [(buf.validate.field).bytes.len = 32]; // sign.publicKeyLength
-        bytes client_server_signed_challenge = 3  [(buf.validate.field).bytes.min_len = 16, (buf.validate.field).bytes.max_len = 128];
+        bytes client_server_signed_challenge = 3  [(buf.validate.field).bytes.len = 160]; // 32 + 64 + 64
         RegisterKeyMaterial keys = 4              [(buf.validate.field).required = true];
     }
     
@@ -97,7 +97,7 @@ message GetChallengeResponse {
 message LoginRequest {
     message PublicKeyLoginRequest {
         string identifier = 1                         [(buf.validate.field).string.min_len = 8, (buf.validate.field).string.max_len = 64];
-        bytes client_server_signed_challenge = 2      [(buf.validate.field).bytes.min_len = 16, (buf.validate.field).bytes.max_len = 128];
+        bytes client_server_signed_challenge = 2      [(buf.validate.field).bytes.len = 160]; // 32 + 64 + 64
     }
     
     message PasswordLoginRequest {
