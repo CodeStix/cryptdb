@@ -49,8 +49,9 @@ model User {
   encryptedPrivateDataKey      Bytes
   encryptedPrivateDataKeyNonce Bytes
 
-  groups   GroupUser[]
-  userKeys UserKey[]
+  groups        GroupUser[]
+  userKeys      UserKey[]
+  groupUserKeys GroupUserKey[]
 }
 
 model GroupUser {
@@ -59,9 +60,7 @@ model GroupUser {
   groupId BigInt
   group   Group  @relation(fields: [groupId], references: [id])
 
-  role                     GroupRole
-  encryptedGroupPrivateKey Bytes // Encrypted using User public key
-  // encryptedGroupPrivateKeyNonce Bytes 
+  role GroupRole
 
   @@id([userId, groupId])
 }
@@ -72,22 +71,45 @@ enum GroupRole {
   Admin // Can add/remove users, including moderators and delete the group
 }
 
+// Contains group public key and private key encrypted for user
+model GroupUserKey {
+  userId  BigInt
+  user    User   @relation(fields: [userId], references: [id])
+  groupId BigInt
+  group   Group  @relation(fields: [groupId], references: [id])
+
+  version                  Int
+  publicKey                Bytes // TODO: stored public key in shared model (is reused for a lot of GroupUserKey)
+  encryptedPrivateKey      Bytes // Encrypted using user public key
+  encryptedUsingKeyVersion Int // The private key is encrypted with this user keypair version
+
+  @@id([userId, groupId, version])
+}
+
+// When a user is removed from a group:
+// -> The group keypair must be regenerated
+// -> The new keypair is encrypted for each remaining user
+// -> TODO: store a signed signature of the remaining users, otherwise the server can fake it
+// -> Each collection under the group must be flagged as 'to-be-key-rotated'
+// -> Each object under the group collections must be flaged as 'to-be-key-rotated'
+// -> The old keypair must also be stored so that remaining collections can still can decrypt and update the previous private key
 model Group {
   id BigInt @id @default(autoincrement())
 
   personalUser User? @relation()
 
-  name              String
-  publicKey         Bytes
-  // privateKey: stored in GroupUserPermission
+  //! Keypair is stored in GroupUserKey
+  name String
   // Only used in public groups:
-  exposedPrivateKey Bytes?
+  // exposedPrivateKey Bytes?
 
   canCreateCollections Boolean @default(false)
 
-  users       GroupUser[]
-  collections GroupCollection[]
-  permissions TablePermission[]
+  users               GroupUser[]
+  collections         GroupCollection[]
+  permissions         TablePermission[]
+  keys                GroupUserKey[]
+  groupCollectionKeys GroupCollectionKey[]
 }
 
 model GroupCollection {
@@ -96,9 +118,6 @@ model GroupCollection {
   collectionId BigInt
   collection   Collection @relation(fields: [collectionId], references: [id])
 
-  encryptedCollectionPrivateKey Bytes? // If key isn't shared, only objects can be added to this collection
-  // encryptedUsingKeyVersion      Int
-
   canAdd      Boolean // Can add objects to this collection
   canRemove   Boolean // Can remove objects from this collection
   canWrite    Boolean // Can update objects in this collection
@@ -106,22 +125,41 @@ model GroupCollection {
   // canQuery    Boolean // Can query objects from this collection
   canShare    Boolean @default(true) // Can share objects from this collection
   canModerate Boolean // Can add/remove groups/users from this collection and adjust permissions
-  // readFields  String[]
-  // writeFields String[]
 
   @@id([groupId, collectionId])
 }
 
+// Contains collection public key and private key encrypted for group
+model GroupCollectionKey {
+  groupId      BigInt
+  group        Group      @relation(fields: [groupId], references: [id])
+  collectionId BigInt
+  collection   Collection @relation(fields: [collectionId], references: [id])
+
+  version                  Int
+  publicKey                Bytes // TODO: stored public key in shared model (is reused for a lot of GroupCollectionKey)
+  encryptedPrivateKey      Bytes // Encrypted using group public key
+  encryptedUsingKeyVersion Int // The private key is encrypted with this GroupUserKey version
+
+  @@id([groupId, collectionId, version])
+}
+
+// When a group is removed from a collection (or the collection is marked to be key-rotated)
+// -> The collection keypair must be regenerated
+// -> The new private key is encrypted for each remaining group
+// -> TODO: store a signed signature of the remaining groups, otherwise the server can fake it
+// -> Each object in the collection must be flaged as 'to-be-key-rotated'
+// -> The old keypair must also be stored so that remaining objects can still can decrypt and update the previous key
 model Collection {
   id      BigInt             @id @default(autoincrement())
   groups  GroupCollection[]
   objects CollectionObject[]
 
-  name      String
-  publicKey Bytes
-  // privateKey: stored in GroupCollection
+  name String
+  //! Keypair is stored in GroupCollectionKey
 
-  personalUser User? @relation()
+  personalUser User?                @relation()
+  keys         GroupCollectionKey[]
 }
 
 model CollectionObject {
@@ -130,16 +168,17 @@ model CollectionObject {
   objectId     BigInt
   object       Object     @relation(fields: [objectId], references: [id])
 
-  encryptedObjectKey Bytes // Encrypted using Collection public key
-
-  // encryptedUsingKeyVersion Int
-  // encryptedObjectKeyNonce Bytes
-  // encryptedColumnKeys Json // Encrypted
+  encryptedObjectKey       Bytes // Encrypted using Collection public key
+  encryptedUsingKeyVersion Int
 
   @@id([collectionId, objectId])
   @@index([collectionId])
 }
 
+// When an object is removed from a collection (or the object is marked to be key-rotated):
+// -> A new key is generated and encrypted for each remaining collection
+// -> The object is re-encrypted with the new key
+// -> A list of collection ids is also stored in the encrypted data so that the server can't fake it
 model Object {
   id         BigInt          @id @default(autoincrement())
   tableName  String // User specified type of the object, eg "ShoppingItem", "UserProfile"
@@ -152,26 +191,6 @@ model Object {
 
   @@index([tableName])
 }
-
-// when obbject unshared from collection 3:
-// list of current collections is returned -> [1,2,3]
-// objectKey is re-genenerated
-// objectKey is encrypted with public key of 1 and 2 (not 3)
-// update CollectionObject rows withh new encrypted object keys
-
-// when collection 2 unshared from group 5:
-// list of current groups is returned -> [3,4,5]
-// collection keypair is re-generated
-// privateKey is encrypted with public key of group 3 and 4 (not 5)
-// update GroupCollection rows with their new encrypted private keys
-// every object key in the collection 
-
-// when user 10 is removed from group 20
-// list of current users is returned -> [10,11,12]
-// group keypair is regenerated
-// privateKey is encrypted with public key of user 11 and 12 (not 10)
-// update GroupUser rows with their new encrypted private keys
-// 
 
 model TableDescriptor {
   tableName   String            @id @unique

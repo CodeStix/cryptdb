@@ -133,3 +133,21 @@ message LoginResponse {
         LoginResponseOkData ok = 2;
     }
 }
+
+message GetCollectionRequest {
+    uint64 id = 1;
+}
+
+message GetCollectionResponse {
+    message GetCollectionOkResponse {
+
+    }    
+}
+
+message GetObjectRequest {
+    uint64 id = 1;
+}
+
+message GetObjectResponse {
+    
+}

@@ -25,6 +25,7 @@ import nacl from "tweetnacl";
 import console from "console";
 import { createValidator } from "@bufbuild/protovalidate";
 import { DescMessage, fromBinary, create, MessageShape, MessageInitShape, toBinary } from "@bufbuild/protobuf";
+import { ToTuple } from "@prisma/client/runtime/client";
 
 const JWT_EXPIRE_IN = 18 * 60 * 60;
 
@@ -32,6 +33,13 @@ type CryptToken = {
     uid: number;
     c: number; // counter
 };
+
+// class ValidationError extends Error {
+//     constructor(...args: any[]) {
+//         super(...args);
+//         this.name = "ValidationError";
+//     }
+// }
 
 class CryptServer {
     server: http.Server;
@@ -67,10 +75,10 @@ class CryptServer {
         //     publicKey: Buffer.from("cc79c23b712f5d3a4aaa419eed3798ceda8f848ef74150365d386d4b4c863724", "hex"),
         // };
 
-        // this.publicGroupKeyPair = {
-        //     secretKey: Buffer.from("6b60a2c2b1bdc5f488af2ef3622256f6796db9fa9f853874e4728819d3e197e9", "hex"),
-        //     publicKey: Buffer.from("0aec6bbab98ea4a5bde9617846b1351d757048abdcd736a8721a2023d3033a17", "hex"),
-        // };
+        this.publicGroupKeyPair = {
+            secretKey: Buffer.from("6b60a2c2b1bdc5f488af2ef3622256f6796db9fa9f853874e4728819d3e197e9", "hex"),
+            publicKey: Buffer.from("0aec6bbab98ea4a5bde9617846b1351d757048abdcd736a8721a2023d3033a17", "hex"),
+        };
 
         // console.log("this.challengeSignKeyPair", {
         //     secretKey: Buffer.from(this.challengeSignKeyPair.secretKey).toString("hex"),
@@ -90,34 +98,31 @@ class CryptServer {
         let publicGroup = await this.prisma.group.findFirst({
             where: {
                 name: "Public",
-                exposedPrivateKey: {
-                    not: null,
-                },
             },
         });
         if (!publicGroup) {
-            const groupKeyPair = nacl.box.keyPair();
+            // const groupKeyPair = nacl.box.keyPair();
 
-            console.log("Creating public group", {
-                secretKey: Buffer.from(groupKeyPair.secretKey).toString("hex"),
-                publicKey: Buffer.from(groupKeyPair.publicKey).toString("hex"),
-            });
+            // console.log("Creating public group", {
+            //     secretKey: Buffer.from(groupKeyPair.secretKey).toString("hex"),
+            //     publicKey: Buffer.from(groupKeyPair.publicKey).toString("hex"),
+            // });
 
             publicGroup = await this.prisma.group.create({
                 data: {
                     name: "Public",
-                    publicKey: Buffer.from(groupKeyPair.publicKey),
-                    exposedPrivateKey: Buffer.from(groupKeyPair.secretKey),
+                    // publicKey: Buffer.from(groupKeyPair.publicKey),
+                    // exposedPrivateKey: Buffer.from(groupKeyPair.secretKey),
                     canCreateCollections: false,
                 },
             });
         }
 
         this.publicGroupId = Number(publicGroup.id);
-        this.publicGroupKeyPair = {
-            publicKey: publicGroup.publicKey,
-            secretKey: publicGroup.exposedPrivateKey!,
-        };
+        // this.publicGroupKeyPair = {
+        //     publicKey: groupKeyPair.publicKey,
+        //     secretKey: publicGroup.exposedPrivateKey!,
+        // };
 
         console.log("Starting server");
 
@@ -338,7 +343,6 @@ class CryptServer {
         const user = await this.prisma.$transaction(async (prisma) => {
             const group = await prisma.group.create({
                 data: {
-                    publicKey: keys.groupPublicKey as Uint8Array<ArrayBuffer>,
                     name: "PersonalGroup",
                     canCreateCollections: false,
                 },
@@ -347,7 +351,6 @@ class CryptServer {
             const collection = await prisma.collection.create({
                 data: {
                     name: "PersonalCollection",
-                    publicKey: keys.collectionPublicKey as Uint8Array<ArrayBuffer>,
                 },
             });
 
@@ -369,18 +372,36 @@ class CryptServer {
                 },
             });
 
+            await prisma.groupUserKey.create({
+                data: {
+                    version: 1,
+                    encryptedUsingKeyVersion: 1,
+                    encryptedPrivateKey: keys.groupEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
+                    publicKey: keys.groupPublicKey as Uint8Array<ArrayBuffer>,
+                    groupId: group.id,
+                    userId: user.id,
+                },
+            });
             await prisma.groupUser.create({
                 data: {
-                    encryptedGroupPrivateKey: keys.groupEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
                     groupId: group.id,
                     userId: user.id,
                     role: "Reader", // Do not allow adding other users to personal group
                 },
             });
 
+            await prisma.groupUserKey.create({
+                data: {
+                    version: 1, // TODO: include public group key version
+                    encryptedUsingKeyVersion: 1,
+                    encryptedPrivateKey: publicGroupEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
+                    publicKey: this.publicGroupKeyPair.publicKey as Uint8Array<ArrayBuffer>,
+                    groupId: this.publicGroupId,
+                    userId: user.id,
+                },
+            });
             await prisma.groupUser.create({
                 data: {
-                    encryptedGroupPrivateKey: Buffer.from(publicGroupEncryptedPrivateKey),
                     userId: user.id,
                     groupId: this.publicGroupId,
                     role: "Reader", // Do not allow adding other users to public group
@@ -396,7 +417,16 @@ class CryptServer {
                     canRemove: true,
                     canWrite: true,
                     canModerate: false, // Do not allow sharing the personal collection
-                    encryptedCollectionPrivateKey: keys.collectionEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
+                },
+            });
+            await prisma.groupCollectionKey.create({
+                data: {
+                    version: 1,
+                    encryptedUsingKeyVersion: 1,
+                    encryptedPrivateKey: keys.collectionEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
+                    publicKey: keys.collectionPublicKey as Uint8Array<ArrayBuffer>,
+                    groupId: group.id,
+                    collectionId: collection.id,
                 },
             });
 
@@ -507,7 +537,12 @@ class CryptServer {
                 identifier: data.method.value!.identifier,
             },
             include: {
-                user: true,
+                user: {
+                    include: {
+                        personalGroup: true,
+                        personalCollection: true,
+                    },
+                },
             },
         });
         if (!credential) {
@@ -571,6 +606,29 @@ class CryptServer {
         };
     }
 
+    private async ensureUser(req: http.IncomingMessage, url: URL) {
+        let token: string | null;
+        if (req.method === "POST") {
+            const auth = req.headers["authorization"];
+            token = auth ? auth.slice("Bearer ".length) : null;
+        } else {
+            token = url.searchParams.get("token");
+        }
+
+        console.log("Found token", token);
+
+        if (!token) {
+            throw new Error("Not authenticated");
+        }
+
+        const user = await this.getUserForToken(token);
+        if (!user) {
+            throw new Error("Invalid token");
+        }
+
+        return user;
+    }
+
     private async getUserForToken(token: string) {
         let data: CryptToken;
         try {
@@ -622,6 +680,152 @@ class CryptServer {
                 },
             },
         };
+    }
+
+    private async handleGetGroup(url: URL, req: http.IncomingMessage, res: http.ServerResponse) {
+        const user = await this.ensureUser(req, url);
+
+        const groupId = 10;
+
+        const group = await this.prisma.group.findUnique({
+            where: {
+                id: groupId,
+            },
+            select: {
+                id: true,
+                name: true,
+                canCreateCollections: true,
+                keys: {
+                    where: {
+                        userId: user.id,
+                    },
+                    select: {
+                        version: true,
+                        encryptedUsingKeyVersion: true,
+                        encryptedPrivateKey: true,
+                        publicKey: true,
+                    },
+                },
+                users: {
+                    where: {
+                        userId: user.id,
+                    },
+                    select: {
+                        role: true,
+                    },
+                },
+            },
+        });
+    }
+
+    private async handleGetCollection(url: URL, req: http.IncomingMessage, res: http.ServerResponse) {
+        const user = await this.ensureUser(req, url);
+
+        const collectionId = 10;
+
+        const collection = await this.prisma.collection.findUnique({
+            where: {
+                id: collectionId,
+            },
+            select: {
+                id: true,
+                name: true,
+                groups: {
+                    where: {
+                        group: {
+                            users: {
+                                some: {
+                                    userId: user.id,
+                                },
+                            },
+                        },
+                    },
+                    select: {
+                        canAdd: true,
+                        canModerate: true,
+                        canRemove: true,
+                        canShare: true,
+                        canWrite: true,
+                        groupId: true,
+                    },
+                },
+                keys: {
+                    where: {
+                        group: {
+                            users: {
+                                some: {
+                                    userId: user.id,
+                                },
+                            },
+                        },
+                    },
+                    select: {
+                        publicKey: true,
+                        groupId: true,
+                        encryptedPrivateKey: true,
+                        encryptedUsingKeyVersion: true,
+                        version: true,
+                    },
+                },
+            },
+        });
+
+        // TODO: add anti-timing attack measures here so that a client can't distinguish between no access and not found
+        if (!collection) {
+            return { status: "not-found" };
+        }
+        if (collection.keys.length < 0 || collection.groups.length < 0) {
+            return { status: "not-found" };
+        }
+    }
+
+    private async handleGetObject(url: URL, req: http.IncomingMessage, res: http.ServerResponse) {
+        const user = await this.ensureUser(req, url);
+
+        const objectId = 10;
+
+        const object = await this.prisma.object.findUnique({
+            where: {
+                id: objectId,
+            },
+            select: {
+                id: true,
+                data: true,
+                nonce: true,
+                publicData: true,
+                tableName: true,
+                collections: {
+                    where: {
+                        collection: {
+                            groups: {
+                                some: {
+                                    group: {
+                                        users: {
+                                            some: {
+                                                userId: user.id,
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    select: {
+                        encryptedObjectKey: true,
+                        encryptedUsingKeyVersion: true,
+                        collectionId: true,
+                    },
+                },
+            },
+        });
+
+        // TODO: add anti-timing attack measures here so that a client can't distinguish between no access and not found
+        if (!object) {
+            return { status: "not-found" };
+        }
+        if (object.collections.length <= 0) {
+            return { status: "not-found" };
+        }
     }
 }
 
