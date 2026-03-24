@@ -14,6 +14,12 @@ enum ErrorCode {
     INVALID_CLIENT_SIGNATURE = 7;
     INVALID_PUBLIC_DATA_KEY  = 8;
     INVALID_PUBLIC_CHALLENGE_KEY = 9;
+    UNAUTHENTICATED = 10;
+    NO_COLLECTION_PERMISSION = 11;
+    NO_GROUP_PERMISSION = 12;
+    PRIVATE_DATA_TOO_LARGE = 13;
+    PUBLIC_DATA_TOO_LARGE = 14;
+    PRIVATE_DATA_OUTDATED_KEY = 15;
 }
 
 message ErrorResponse {
@@ -221,4 +227,25 @@ message GetObjectRequest {
 
 message GetObjectResponse {
     ObjectResponse object = 1;
+}
+
+message CreateObjectRequest {
+    string table_name = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 64];
+    bytes data = 2; // Max length is validated server side
+    bytes nonce = 3 [(buf.validate.field).bytes.len = 24];   
+    string public_json = 4; // Max length is validated server side
+    uint64 collection_id = 5;
+    int32 encrypted_using_key_version = 6;
+    bytes encrypted_object_key = 7 [(buf.validate.field).bytes.len = 64];
+}
+
+message CreateObjectResponse {
+    message CreateObjectOkResponse {
+        uint64 id = 1;
+    }
+
+    oneof response {
+        ErrorResponse error = 1;
+        CreateObjectOkResponse ok = 2;
+    }
 }

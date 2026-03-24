@@ -94,7 +94,8 @@ model Group {
   personalUser User? @relation()
 
   //! Keypair is stored in GroupUserKey
-  name String
+  name             String
+  latestKeyVersion Int    @default(1)
   // Only used in public groups:
   // exposedPrivateKey Bytes?
 
@@ -150,7 +151,8 @@ model Collection {
   groups  GroupCollection[]
   objects CollectionObject[]
 
-  name String
+  name             String
+  latestKeyVersion Int    @default(1)
   //! Keypair is stored in GroupCollectionKey
 
   personalUser User?                @relation()

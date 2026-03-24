@@ -20,6 +20,8 @@ import {
     GetGroupResponseSchema,
     GetObjectResponseSchema,
     GetObjectRequestSchema,
+    CreateObjectRequestSchema,
+    CreateObjectResponseSchema,
 } from "cryptdb-client";
 import { GroupRole, PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -28,12 +30,14 @@ import * as z from "zod";
 import * as bcrypt from "bcrypt";
 import * as jwt from "jsonwebtoken";
 import nacl from "tweetnacl";
-import console from "console";
+import console, { timeStamp } from "console";
 import { createValidator } from "@bufbuild/protovalidate";
 import { DescMessage, fromBinary, create, MessageShape, MessageInitShape, toBinary } from "@bufbuild/protobuf";
 import { ToTuple } from "@prisma/client/runtime/client";
 
 const JWT_EXPIRE_IN = 18 * 60 * 60;
+const MAX_PRIVATE_DATA_LENGTH = 1000;
+const MAX_PUBLIC_DATA_LENGTH = 1000;
 
 type CryptToken = {
     uid: number;
@@ -46,6 +50,17 @@ type CryptToken = {
 //         this.name = "ValidationError";
 //     }
 // }
+
+function createErrorMessage(errorCode: ErrorCode) {
+    return {
+        response: {
+            case: "error" as const,
+            value: {
+                errorCode: errorCode,
+            },
+        },
+    };
+}
 
 class CryptServer {
     server: http.Server;
@@ -337,14 +352,7 @@ class CryptServer {
             publicGroupEncryptedPrivateKey = naclBoxEphemeral(this.publicGroupKeyPair.secretKey, keys.publicDataKey);
         } catch (ex) {
             console.error("Invalid data public key", data);
-            return {
-                response: {
-                    case: "error",
-                    value: {
-                        errorCode: ErrorCode.INVALID_PUBLIC_DATA_KEY,
-                    },
-                },
-            };
+            return createErrorMessage(ErrorCode.INVALID_PUBLIC_DATA_KEY);
         }
 
         if (data.method.case === "publicKey") {
@@ -353,14 +361,7 @@ class CryptServer {
 
             const verificationError = await this.verifyChallenge(clientServerSignedChallenge, publicChallengeKey);
             if (verificationError !== undefined) {
-                return {
-                    response: {
-                        case: "error",
-                        value: {
-                            errorCode: verificationError,
-                        },
-                    },
-                };
+                return createErrorMessage(verificationError);
             }
         }
 
@@ -548,14 +549,7 @@ class CryptServer {
             },
         });
         if (!credential) {
-            return {
-                response: {
-                    case: "error",
-                    value: {
-                        errorCode: ErrorCode.UNKNOWN_CREDENTIAL,
-                    },
-                },
-            };
+            return createErrorMessage(ErrorCode.UNKNOWN_CREDENTIAL);
         }
 
         if (credential.method === "publicKey" && data.method.case === "publicKey") {
@@ -564,17 +558,10 @@ class CryptServer {
 
             const verificationError = await this.verifyChallenge(clientServerSignedChallenge, publicKey);
             if (verificationError !== undefined) {
-                return {
-                    response: {
-                        case: "error",
-                        value: {
-                            errorCode: verificationError,
-                        },
-                    },
-                };
+                return createErrorMessage(verificationError);
             }
         } else {
-            return { response: { case: "error", value: { errorCode: ErrorCode.INVALID_METHOD } } };
+            return createErrorMessage(ErrorCode.INVALID_METHOD);
         }
 
         const token = this.createAccessToken(credential.userId, credential.user.tokenCounter);
@@ -924,6 +911,77 @@ class CryptServer {
                     encryptedObjectKey: e.encryptedObjectKey,
                     encryptedUsingKeyVersion: e.encryptedUsingKeyVersion,
                 })),
+            },
+        };
+    }
+
+    private async handleCreateObject(
+        url: URL,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<MessageInitShape<typeof CreateObjectResponseSchema>> {
+        const user = await this.ensureUser(req, url);
+
+        const data = await this.parseBodyProtoValidated(req, CreateObjectRequestSchema);
+        if (data.publicJson.length > MAX_PUBLIC_DATA_LENGTH) {
+            return createErrorMessage(ErrorCode.PUBLIC_DATA_TOO_LARGE);
+        }
+        if (data.data.length > MAX_PRIVATE_DATA_LENGTH) {
+            return createErrorMessage(ErrorCode.PRIVATE_DATA_TOO_LARGE);
+        }
+
+        const permission = await this.prisma.groupCollection.findFirst({
+            where: {
+                collectionId: data.collectionId,
+                group: {
+                    users: {
+                        some: {
+                            userId: user.id,
+                        },
+                    },
+                },
+                canAdd: true,
+            },
+            select: {
+                collection: {
+                    select: {
+                        latestKeyVersion: true,
+                    },
+                },
+            },
+        });
+        if (!permission) {
+            return createErrorMessage(ErrorCode.NO_COLLECTION_PERMISSION);
+        }
+        if (data.encryptedUsingKeyVersion !== permission.collection.latestKeyVersion) {
+            return createErrorMessage(ErrorCode.PRIVATE_DATA_OUTDATED_KEY);
+        }
+
+        const publicData = JSON.parse(data.publicJson);
+        // TODO: validate publicData
+
+        const object = await this.prisma.object.create({
+            data: {
+                data: data.data as Uint8Array<ArrayBuffer>,
+                nonce: data.nonce as Uint8Array<ArrayBuffer>,
+                publicData: publicData,
+                tableName: data.tableName,
+                collections: {
+                    create: {
+                        encryptedObjectKey: data.encryptedObjectKey as Uint8Array<ArrayBuffer>,
+                        encryptedUsingKeyVersion: data.encryptedUsingKeyVersion,
+                        collectionId: data.collectionId,
+                    },
+                },
+            },
+        });
+
+        return {
+            response: {
+                case: "ok",
+                value: {
+                    id: object.id,
+                },
             },
         };
     }
