@@ -23,14 +23,11 @@ export function naclBoxEphemeral(message: Uint8Array, recipientPk: Uint8Array): 
     return result;
 }
 
-export function naclBoxEphemeralOpen(ciphertext: Uint8Array, recipientPk: Uint8Array, recipientSk: Uint8Array): Uint8Array {
+export function naclBoxEphemeralOpen(ciphertext: Uint8Array, recipientPk: Uint8Array, recipientSk: Uint8Array): Uint8Array | null {
     const ephemeralPk = ciphertext.slice(0, NACL_EPHEMERAL_BOX_OVERHEAD);
     const box = ciphertext.slice(NACL_EPHEMERAL_BOX_OVERHEAD);
     const nonce = deriveNonce(ephemeralPk, recipientPk);
     const result = nacl.box.open(box, nonce, ephemeralPk, recipientSk);
-    if (result === null) {
-        throw new Error("Decryption failed: invalid ciphertext or key");
-    }
     return result;
 }
 

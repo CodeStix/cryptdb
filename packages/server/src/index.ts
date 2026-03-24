@@ -14,8 +14,14 @@ import {
     GetChallengeResponseSchema,
     GetChallengeRequestSchema,
     RegisterResponseSchema,
+    GetCollectionRequestSchema,
+    GetCollectionResponseSchema,
+    GetGroupRequestSchema,
+    GetGroupResponseSchema,
+    GetObjectResponseSchema,
+    GetObjectRequestSchema,
 } from "cryptdb-client";
-import { PrismaClient, User } from "../prisma/prisma/client";
+import { GroupRole, PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import http from "http";
 import * as z from "zod";
@@ -137,6 +143,8 @@ class CryptServer {
 
         const buffer = await this.parseBodyBytes(req);
 
+        console.log("===>", buffer.toString("hex"), buffer.length);
+
         const msg = fromBinary(schema, buffer);
 
         const result = validator.validate(schema, msg);
@@ -151,8 +159,8 @@ class CryptServer {
     private respondWithProto<Desc extends DescMessage>(res: http.ServerResponse, schema: Desc, msg: MessageInitShape<Desc>) {
         const m = create(schema, msg);
         const buffer = Buffer.from(toBinary(schema, m));
+        console.log("<===", buffer.toString("hex"), buffer.length);
         res.end(buffer);
-        // res.end();
     }
 
     // private async serializeMessage<Desc extends DescMessage>(schema: Desc, msg: MessageInitShape<Desc>) {
@@ -284,6 +292,24 @@ class CryptServer {
             case "/register": {
                 this.ensureHttpMethod(req, "POST");
                 this.respondWithProto(res, RegisterResponseSchema, await this.handleRegister(url, req, res));
+                break;
+            }
+
+            case "/group": {
+                this.ensureHttpMethod(req, "POST");
+                this.respondWithProto(res, GetGroupResponseSchema, await this.handleGetGroup(url, req, res));
+                break;
+            }
+
+            case "/collection": {
+                this.ensureHttpMethod(req, "POST");
+                this.respondWithProto(res, GetCollectionResponseSchema, await this.handleGetCollection(url, req, res));
+                break;
+            }
+
+            case "/object": {
+                this.ensureHttpMethod(req, "POST");
+                this.respondWithProto(res, GetObjectResponseSchema, await this.handleGetObject(url, req, res));
                 break;
             }
 
@@ -601,6 +627,9 @@ class CryptServer {
                     publicDataKey: credential.user.publicDataKey,
                     encryptedPrivateDataKey: credential.user.encryptedPrivateDataKey,
                     encryptedPrivateDataKeyNonce: credential.user.encryptedPrivateDataKeyNonce,
+
+                    personalCollectionId: credential.user.personalCollectionId,
+                    personalGroupId: credential.user.personalGroupId,
                 },
             },
         };
@@ -682,14 +711,22 @@ class CryptServer {
         };
     }
 
-    private async handleGetGroup(url: URL, req: http.IncomingMessage, res: http.ServerResponse) {
+    private async handleGetGroup(
+        url: URL,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<MessageInitShape<typeof GetGroupResponseSchema>> {
+        const data = await this.parseBodyProtoValidated(req, GetGroupRequestSchema);
         const user = await this.ensureUser(req, url);
-
-        const groupId = 10;
 
         const group = await this.prisma.group.findUnique({
             where: {
-                id: groupId,
+                id: data.id,
+                users: {
+                    some: {
+                        userId: user.id,
+                    },
+                },
             },
             select: {
                 id: true,
@@ -700,6 +737,7 @@ class CryptServer {
                         userId: user.id,
                     },
                     select: {
+                        userId: true,
                         version: true,
                         encryptedUsingKeyVersion: true,
                         encryptedPrivateKey: true,
@@ -711,21 +749,59 @@ class CryptServer {
                         userId: user.id,
                     },
                     select: {
+                        userId: true,
                         role: true,
                     },
                 },
             },
         });
+
+        if (!group) {
+            return {};
+        }
+
+        return {
+            group: {
+                id: group.id,
+                name: group.name,
+                canCreateCollections: group.canCreateCollections,
+                users: group.users.map((e) => ({
+                    role: e.role,
+                    userId: e.userId,
+                })),
+                keys: group.keys.map((e) => ({
+                    encryptedPrivateKey: e.encryptedPrivateKey,
+                    encryptedUsingKeyVersion: e.encryptedUsingKeyVersion,
+                    userId: e.userId,
+                    publicKey: e.publicKey,
+                    version: e.version,
+                })),
+            },
+        };
     }
 
-    private async handleGetCollection(url: URL, req: http.IncomingMessage, res: http.ServerResponse) {
+    private async handleGetCollection(
+        url: URL,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<MessageInitShape<typeof GetCollectionResponseSchema>> {
+        const data = await this.parseBodyProtoValidated(req, GetCollectionRequestSchema);
         const user = await this.ensureUser(req, url);
-
-        const collectionId = 10;
 
         const collection = await this.prisma.collection.findUnique({
             where: {
-                id: collectionId,
+                id: data.id,
+                groups: {
+                    some: {
+                        group: {
+                            users: {
+                                some: {
+                                    userId: user.id,
+                                },
+                            },
+                        },
+                    },
+                },
             },
             select: {
                 id: true,
@@ -747,6 +823,11 @@ class CryptServer {
                         canShare: true,
                         canWrite: true,
                         groupId: true,
+                        group: {
+                            select: {
+                                name: true,
+                            },
+                        },
                     },
                 },
                 keys: {
@@ -770,23 +851,62 @@ class CryptServer {
             },
         });
 
-        // TODO: add anti-timing attack measures here so that a client can't distinguish between no access and not found
         if (!collection) {
-            return { status: "not-found" };
+            return {};
         }
-        if (collection.keys.length < 0 || collection.groups.length < 0) {
-            return { status: "not-found" };
-        }
+
+        return {
+            collection: {
+                id: collection.id,
+                name: collection.name,
+                groups: collection.groups.map((e) => ({
+                    canAdd: e.canAdd,
+                    canRemove: e.canRemove,
+                    canModerate: e.canModerate,
+                    canShare: e.canShare,
+                    canWrite: e.canWrite,
+                    groupId: e.groupId,
+                    groupName: e.group.name,
+                })),
+                keys: collection.keys.map((e) => ({
+                    encryptedPrivateKey: e.encryptedPrivateKey,
+                    encryptedUsingKeyVersion: e.encryptedUsingKeyVersion,
+                    groupId: e.groupId,
+                    publicKey: e.publicKey,
+                    version: e.version,
+                })),
+            },
+        };
     }
 
-    private async handleGetObject(url: URL, req: http.IncomingMessage, res: http.ServerResponse) {
+    private async handleGetObject(
+        url: URL,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<MessageInitShape<typeof GetObjectResponseSchema>> {
+        const data = await this.parseBodyProtoValidated(req, GetObjectRequestSchema);
         const user = await this.ensureUser(req, url);
-
-        const objectId = 10;
 
         const object = await this.prisma.object.findUnique({
             where: {
-                id: objectId,
+                id: data.id,
+                collections: {
+                    some: {
+                        collection: {
+                            groups: {
+                                some: {
+                                    group: {
+                                        users: {
+                                            some: {
+                                                userId: user.id,
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
             },
             select: {
                 id: true,
@@ -819,13 +939,23 @@ class CryptServer {
             },
         });
 
-        // TODO: add anti-timing attack measures here so that a client can't distinguish between no access and not found
         if (!object) {
-            return { status: "not-found" };
+            return {};
         }
-        if (object.collections.length <= 0) {
-            return { status: "not-found" };
-        }
+
+        return {
+            object: {
+                id: object.id,
+                data: object.data,
+                nonce: object.nonce,
+                publicJson: JSON.stringify(object.publicData),
+                keys: object.collections.map((e) => ({
+                    collectionId: e.collectionId,
+                    encryptedObjectKey: e.encryptedObjectKey,
+                    encryptedUsingKeyVersion: e.encryptedUsingKeyVersion,
+                })),
+            },
+        };
     }
 }
 

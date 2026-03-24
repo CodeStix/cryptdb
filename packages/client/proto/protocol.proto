@@ -126,6 +126,9 @@ message LoginResponse {
         bytes public_data_key                  = 7;
         bytes encrypted_private_data_key       = 8;
         bytes encrypted_private_data_key_nonce = 9;
+
+        uint64 personal_collection_id = 10;
+        uint64 personal_group_id = 11;
     }
 
     oneof response {
@@ -134,14 +137,80 @@ message LoginResponse {
     }
 }
 
+message Collection {
+    message CollectionGroup {
+        uint64 group_id = 1;
+        bool can_add = 2;
+        bool can_remove = 3;
+        bool can_write = 4;
+        bool can_share = 5;
+        bool can_moderate = 6;
+        string group_name = 7; 
+    }
+
+    message Key {
+        uint64 group_id = 1;
+        uint32 version = 2;
+        bytes public_key = 3;
+        bytes encrypted_private_key = 4;
+        uint32 encrypted_using_key_version = 5;
+    }
+
+    uint64 id = 1;
+    string name = 2;
+    repeated CollectionGroup groups = 3;
+    repeated Key keys = 4;
+}    
+
 message GetCollectionRequest {
     uint64 id = 1;
 }
 
 message GetCollectionResponse {
-    message GetCollectionOkResponse {
+    Collection collection = 1;
+}
 
-    }    
+message Group {
+    message GroupUser {
+        uint64 user_id = 1;
+        string role = 2;
+    }
+
+    message Key {
+        uint64 user_id = 1;
+        uint32 version = 2;
+        bytes public_key = 3;
+        bytes encrypted_private_key = 4;
+        uint32 encrypted_using_key_version = 5;
+    }
+
+    uint64 id = 1;
+    string name = 2;
+    repeated GroupUser users = 3;
+    repeated Key keys = 4;
+    bool can_create_collections = 5;
+}    
+
+message GetGroupRequest {
+    uint64 id = 1;
+}
+
+message GetGroupResponse {
+    Group group = 1;
+}
+
+message Object {
+    message Key {
+        uint64 collection_id = 1;
+        int32 encrypted_using_key_version = 2;
+        bytes encrypted_object_key = 3;
+    }
+
+    uint64 id = 1;
+    bytes data  = 2;
+    bytes nonce = 3;
+    string public_json = 4; 
+    repeated Key keys = 5;
 }
 
 message GetObjectRequest {
@@ -149,5 +218,5 @@ message GetObjectRequest {
 }
 
 message GetObjectResponse {
-    
+    Object object = 1;
 }
