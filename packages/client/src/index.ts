@@ -109,6 +109,10 @@ export class Group {
 
         return keyPair;
     }
+
+    getNewestKeyVersion() {
+        return Math.max(...this.data.keys.map((e) => e.version));
+    }
 }
 
 export class Collection {
@@ -121,6 +125,10 @@ export class Collection {
     constructor(client: CryptClient, id: CollectionId) {
         this.client = client;
         this.id = id;
+    }
+
+    getNewestKeyVersion() {
+        return Math.max(...this.data.keys.map((e) => e.version));
     }
 
     hasKey(version: number) {
@@ -217,11 +225,15 @@ export class CryptClient {
         let res: Response;
 
         if (method === "GET") {
+            console.log("===>", method, this.url + path);
             res = await fetch(this.url + path + (this.token ? "?token=" + encodeURIComponent(this.token) : ""), {
                 method: "GET",
             });
         } else {
             const msg = create(requestSchema, body);
+            const bytes = toBinary(requestSchema, msg);
+
+            console.log("===>", method, this.url + path, encodeBase64(bytes));
 
             const headers: HeadersInit = {};
             headers["Content-Type"] = "application/octet-stream";
@@ -230,7 +242,7 @@ export class CryptClient {
             res = await fetch(this.url + path, {
                 method: method,
                 headers: headers,
-                body: toBinary(requestSchema, msg),
+                body: bytes,
             });
         }
 
@@ -240,6 +252,8 @@ export class CryptClient {
 
         const bytes = new Uint8Array(await res.arrayBuffer());
         const parsed = fromBinary(responseSchema, bytes);
+
+        console.log("<===", method, this.url + path, encodeBase64(bytes));
 
         return parsed;
     }
@@ -477,6 +491,7 @@ export class CryptClient {
         }
 
         const newGroup = new Group(this, id);
+        this.cachedGroups.set(id, newGroup);
         await newGroup.refresh();
         return newGroup;
     }
@@ -488,6 +503,7 @@ export class CryptClient {
         }
 
         const collection = new Collection(this, id);
+        this.cachedCollections.set(id, collection);
         await collection.refresh();
         return collection;
     }
@@ -520,6 +536,12 @@ export class CryptClient {
         }
 
         const objectKey = naclBoxEphemeralOpen(encryptedKey.encryptedObjectKey, keyPair.public, keyPair.private);
+        if (!objectKey) {
+            console.error("Could not decrypt object key", id, encryptedKey, collection);
+            return;
+        }
+
+        console.log("object key", objectKey);
 
         return res.object;
     }
