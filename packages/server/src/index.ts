@@ -9,6 +9,11 @@ import {
     deriveKey,
     naclBoxEphemeral,
     LoginRequestSchema,
+    ErrorCode,
+    LoginResponseSchema,
+    GetChallengeResponseSchema,
+    GetChallengeRequestSchema,
+    RegisterResponseSchema,
 } from "cryptdb-client";
 import { PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -138,10 +143,17 @@ class CryptServer {
         return msg;
     }
 
-    private async serializeMessage<Desc extends DescMessage>(schema: Desc, msg: MessageInitShape<Desc>) {
+    private respondWithProto<Desc extends DescMessage>(res: http.ServerResponse, schema: Desc, msg: MessageInitShape<Desc>) {
         const m = create(schema, msg);
-        return Buffer.from(toBinary(schema, m));
+        const buffer = Buffer.from(toBinary(schema, m));
+        res.end(buffer);
+        // res.end();
     }
+
+    // private async serializeMessage<Desc extends DescMessage>(schema: Desc, msg: MessageInitShape<Desc>) {
+    //     const m = create(schema, msg);
+    //     return Buffer.from(toBinary(schema, m));
+    // }
 
     // private async parseBodyJsonValidated<T extends z.ZodType>(req: http.IncomingMessage, schema: T): Promise<z.infer<T>> {
     //     const json = await this.parseBodyJson(req);
@@ -227,15 +239,15 @@ class CryptServer {
 
         try {
             const url = new URL(req.url!, "http://localhost");
-            const bufferRes = await this.handleUrl(url, req, res);
+            await this.handleUrl(url, req, res);
 
-            if (typeof bufferRes !== "undefined") {
-                console.log("Response", bufferRes);
-                res.end(bufferRes);
-                // res.end(JSON.stringify(bufferRes));
-            } else {
-                console.log("Response open-ended");
-            }
+            // if (typeof bufferRes !== "undefined") {
+            //     console.log("Response", bufferRes);
+            //     res.end(bufferRes);
+            //     // res.end(JSON.stringify(bufferRes));
+            // } else {
+            //     console.log("Response open-ended");
+            // }
         } catch (ex) {
             console.error("Error while handling request", req.url, ex);
 
@@ -250,22 +262,24 @@ class CryptServer {
         }
     }
 
-    private async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<Buffer> {
+    private async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         switch (url.pathname) {
             case "/get-challenge": {
                 this.ensureHttpMethod(req, "GET");
-
-                return this.serializeMessage(LoginRequestSchema, await this.handleGetChallenge(url, req, res));
+                this.respondWithProto(res, GetChallengeResponseSchema, await this.handleGetChallenge(url, req, res));
+                break;
             }
 
             case "/login": {
                 this.ensureHttpMethod(req, "POST");
-                return await this.handleLogin(url, req, res);
+                this.respondWithProto(res, LoginResponseSchema, await this.handleLogin(url, req, res));
+                break;
             }
 
             case "/register": {
                 this.ensureHttpMethod(req, "POST");
-                return await this.handleRegister(url, req, res);
+                this.respondWithProto(res, RegisterResponseSchema, await this.handleRegister(url, req, res));
+                break;
             }
 
             default: {
@@ -276,46 +290,55 @@ class CryptServer {
         }
     }
 
-    private async handleRegister(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<RegisterResponse> {
-        const json = await this.parseBodyJsonValidated(req, RegisterRequestSchema);
+    private async handleRegister(
+        url: URL,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<MessageInitShape<typeof RegisterResponseSchema>> {
+        const data = await this.parseBodyProtoValidated(req, RegisterRequestSchema);
 
-        const encryptedMasterKey = Buffer.from(json.encryptedMasterKey, "base64");
-        const encryptedMasterKeyNonce = Buffer.from(json.encryptedMasterKeyNonce, "base64");
-        const publicSignKey = Buffer.from(json.publicSignKey, "base64");
-        const encryptedPrivateSignKey = Buffer.from(json.encryptedPrivateSignKey, "base64");
-        const encryptedPrivateSignKeyNonce = Buffer.from(json.encryptedPrivateSignKeyNonce, "base64");
-        const publicDataKey = Buffer.from(json.publicDataKey, "base64");
-        const encryptedPrivateDataKey = Buffer.from(json.encryptedPrivateDataKey, "base64");
-        const encryptedPrivateDataKeyNonce = Buffer.from(json.encryptedPrivateDataKeyNonce, "base64");
-        const groupPublicKey = Buffer.from(json.groupPublicKey, "base64");
-        const groupEncryptedPrivateKey = Buffer.from(json.groupEncryptedPrivateKey, "base64");
-        const collectionPublicKey = Buffer.from(json.collectionPublicKey, "base64");
-        const collectionEncryptedPrivateKey = Buffer.from(json.collectionEncryptedPrivateKey, "base64");
+        console.log("data", data);
+
+        const keys = data.method.value!.keys!;
 
         let publicGroupEncryptedPrivateKey: Uint8Array;
         try {
-            publicGroupEncryptedPrivateKey = naclBoxEphemeral(this.publicGroupKeyPair.secretKey, publicDataKey);
+            publicGroupEncryptedPrivateKey = naclBoxEphemeral(this.publicGroupKeyPair.secretKey, keys.publicDataKey);
         } catch (ex) {
-            console.error("Invalid data public key", json);
-            return { status: "invalid-public-data-key" };
+            console.error("Invalid data public key", data);
+            return {
+                response: {
+                    case: "error",
+                    value: {
+                        errorCode: ErrorCode.INVALID_PUBLIC_DATA_KEY,
+                    },
+                },
+            };
         }
 
-        if (json.method === "password") {
+        if (data.method.case === "password") {
             // ...
-        } else if (json.method === "publickey") {
-            const clientServerSignedChallenge = Buffer.from(json.clientServerSignedChallenge, "base64");
-            const publicChallengeKey = Buffer.from(json.publicKey, "base64");
+        } else if (data.method.case === "publicKey") {
+            const clientServerSignedChallenge = data.method.value.clientServerSignedChallenge;
+            const publicChallengeKey = data.method.value.publicKey;
 
-            const verificationStatus = await this.verifyChallenge(clientServerSignedChallenge, publicChallengeKey);
-            if (verificationStatus !== "ok") {
-                return { status: verificationStatus };
+            const verificationError = await this.verifyChallenge(clientServerSignedChallenge, publicChallengeKey);
+            if (verificationError !== undefined) {
+                return {
+                    response: {
+                        case: "error",
+                        value: {
+                            errorCode: verificationError,
+                        },
+                    },
+                };
             }
         }
 
         const user = await this.prisma.$transaction(async (prisma) => {
             const group = await prisma.group.create({
                 data: {
-                    publicKey: groupPublicKey,
+                    publicKey: keys.groupPublicKey as Uint8Array<ArrayBuffer>,
                     name: "PersonalGroup",
                     canCreateCollections: false,
                 },
@@ -324,18 +347,18 @@ class CryptServer {
             const collection = await prisma.collection.create({
                 data: {
                     name: "PersonalCollection",
-                    publicKey: collectionPublicKey,
+                    publicKey: keys.collectionPublicKey as Uint8Array<ArrayBuffer>,
                 },
             });
 
             const user = await prisma.user.create({
                 data: {
-                    publicSignKey: publicSignKey,
-                    encryptedPrivateSignKey: encryptedPrivateSignKey,
-                    encryptedPrivateSignKeyNonce: encryptedPrivateSignKeyNonce,
-                    publicDataKey: publicDataKey,
-                    encryptedPrivateDataKey: encryptedPrivateDataKey,
-                    encryptedPrivateDataKeyNonce: encryptedPrivateDataKeyNonce,
+                    publicSignKey: keys.publicSignKey as Uint8Array<ArrayBuffer>,
+                    encryptedPrivateSignKey: keys.encryptedPrivateSignKey as Uint8Array<ArrayBuffer>,
+                    encryptedPrivateSignKeyNonce: keys.encryptedPrivateSignKeyNonce as Uint8Array<ArrayBuffer>,
+                    publicDataKey: keys.publicDataKey as Uint8Array<ArrayBuffer>,
+                    encryptedPrivateDataKey: keys.encryptedPrivateDataKey as Uint8Array<ArrayBuffer>,
+                    encryptedPrivateDataKeyNonce: keys.encryptedPrivateDataKeyNonce as Uint8Array<ArrayBuffer>,
 
                     personalGroupId: group.id,
                     personalCollectionId: collection.id,
@@ -348,7 +371,7 @@ class CryptServer {
 
             await prisma.groupUser.create({
                 data: {
-                    encryptedGroupPrivateKey: groupEncryptedPrivateKey,
+                    encryptedGroupPrivateKey: keys.groupEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
                     groupId: group.id,
                     userId: user.id,
                     role: "Reader", // Do not allow adding other users to personal group
@@ -373,36 +396,41 @@ class CryptServer {
                     canRemove: true,
                     canWrite: true,
                     canModerate: false, // Do not allow sharing the personal collection
-                    encryptedCollectionPrivateKey: collectionEncryptedPrivateKey,
+                    encryptedCollectionPrivateKey: keys.collectionEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
                 },
             });
 
-            if (json.method === "password") {
-                const password = Buffer.from(json.password, "base64");
+            if (data.method.case === "password") {
+                const password = data.method.value.password;
 
                 const passwordSalt = crypto.getRandomValues(new Uint8Array(32));
-                const hashedPassword = Buffer.from(await this.hashPassword(password, passwordSalt));
+                const hashedPassword = await this.hashPassword(password, passwordSalt);
+
+                console.log("identifier", data.method.value.identifier);
 
                 await prisma.userKey.create({
                     data: {
-                        encryptedMasterKey: encryptedMasterKey,
-                        encryptedMasterKeyNonce: encryptedMasterKeyNonce,
-                        identifier: json.identifier,
-                        method: json.method,
-                        passwordHash: hashedPassword,
+                        encryptedMasterKey: keys.encryptedMasterKey as Uint8Array<ArrayBuffer>,
+                        encryptedMasterKeyNonce: keys.encryptedMasterKeyNonce as Uint8Array<ArrayBuffer>,
+                        identifier: data.method.value.identifier,
+                        method: "password",
+                        passwordHash: hashedPassword as Uint8Array<ArrayBuffer>,
                         passwordSalt: passwordSalt,
-                        userId: user.id,
+                        user: {
+                            connect: {
+                                id: user.id,
+                            },
+                        },
                     },
                 });
-            } else if (json.method === "publickey") {
-                const publicKey = Buffer.from(json.publicKey, "base64");
+            } else if (data.method.case === "publicKey") {
                 await prisma.userKey.create({
                     data: {
-                        encryptedMasterKey: encryptedMasterKey,
-                        encryptedMasterKeyNonce: encryptedMasterKeyNonce,
-                        identifier: json.identifier,
-                        method: json.method,
-                        publicKey: publicKey,
+                        encryptedMasterKey: keys.encryptedMasterKey as Uint8Array<ArrayBuffer>,
+                        encryptedMasterKeyNonce: keys.encryptedMasterKeyNonce as Uint8Array<ArrayBuffer>,
+                        identifier: data.method.value.identifier,
+                        method: "publicKey",
+                        publicKey: data.method.value.publicKey as Uint8Array<ArrayBuffer>,
                         // userId: user.id,
                         user: {
                             connect: {
@@ -421,8 +449,12 @@ class CryptServer {
         console.log("Registered user", token);
 
         return {
-            status: "ok",
-            token: token,
+            response: {
+                case: "ok",
+                value: {
+                    token: token,
+                },
+            },
         };
     }
 
@@ -430,17 +462,17 @@ class CryptServer {
         return await deriveKey(password, salt, 32, 100000);
     }
 
-    private async verifyChallenge(clientServerSignedChallenge: Uint8Array, clientPublicKey: Uint8Array): Promise<ChallengeVerificationStatus> {
+    private async verifyChallenge(clientServerSignedChallenge: Uint8Array, clientPublicKey: Uint8Array): Promise<ErrorCode | undefined> {
         const serverSignedChallenge = nacl.sign.open(clientServerSignedChallenge, clientPublicKey);
         if (!serverSignedChallenge) {
             console.log("Invalid client signature");
-            return "invalid-client-signature";
+            return ErrorCode.INVALID_CLIENT_SIGNATURE;
         }
 
         const challenge = nacl.sign.open(serverSignedChallenge, this.challengeSignKeyPair.publicKey);
         if (!challenge) {
             console.log("Invalid server signature");
-            return "invalid-server-signature";
+            return ErrorCode.INVALID_SERVER_SIGNATURE;
         }
 
         const challengeView = new DataView(challenge.buffer);
@@ -448,10 +480,10 @@ class CryptServer {
         const now = new Date().getTime() / 1000;
         if (challengeExpireTime < now) {
             console.log("Challenge expired by", now - challengeExpireTime, "seconds");
-            return "challenge-expired";
+            return ErrorCode.CHALLENGE_EXPIRED;
         }
 
-        return "ok";
+        return undefined;
     }
 
     private createAccessToken(userId: number | bigint, tokenCounter: number) {
@@ -467,57 +499,75 @@ class CryptServer {
         );
     }
 
-    private async handleLogin(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<LoginResponse> {
-        const json = await this.parseBodyJsonValidated(req, LoginRequestSchema);
+    private async handleLogin(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<MessageInitShape<typeof LoginResponseSchema>> {
+        const data = await this.parseBodyProtoValidated(req, LoginRequestSchema);
 
         const credential = await this.prisma.userKey.findUnique({
             where: {
-                identifier: json.identifier,
+                identifier: data.method.value!.identifier,
             },
             include: {
                 user: true,
             },
         });
         if (!credential) {
-            return { status: "unknown-credential" };
+            return {
+                response: {
+                    case: "error",
+                    value: {
+                        errorCode: ErrorCode.UNKNOWN_CREDENTIAL,
+                    },
+                },
+            };
         }
 
-        if (credential.method === "publickey" && json.method === "publickey") {
-            const clientServerSignedChallenge = Buffer.from(json.clientServerSignedChallenge, "base64");
+        if (credential.method === "publicKey" && data.method.case === "publicKey") {
+            const clientServerSignedChallenge = data.method.value.clientServerSignedChallenge;
             const publicKey = credential.publicKey!;
 
-            const verificationStatus = await this.verifyChallenge(clientServerSignedChallenge, publicKey);
-            if (verificationStatus !== "ok") {
-                return { status: verificationStatus };
+            const verificationError = await this.verifyChallenge(clientServerSignedChallenge, publicKey);
+            if (verificationError !== undefined) {
+                return {
+                    response: {
+                        case: "error",
+                        value: {
+                            errorCode: verificationError,
+                        },
+                    },
+                };
             }
-        } else if (credential.method === "password" && json.method === "password") {
-            const password = Buffer.from(json.password, "base64");
+        } else if (credential.method === "password" && data.method.case === "password") {
+            const password = data.method.value.password;
 
             const hashedPassword = new Uint8Array(await this.hashPassword(password, credential.passwordSalt!));
 
             if (Buffer.compare(credential.passwordHash!, hashedPassword) != 0) {
-                return { status: "wrong-password" };
+                return { response: { case: "error", value: { errorCode: ErrorCode.WRONG_PASSWORD } } };
             }
         } else {
-            return { status: "invalid-method" };
+            return { response: { case: "error", value: { errorCode: ErrorCode.INVALID_METHOD } } };
         }
 
         const token = this.createAccessToken(credential.userId, credential.user.tokenCounter);
 
         return {
-            status: "ok",
-            token: token,
+            response: {
+                case: "ok",
+                value: {
+                    token: token,
 
-            encryptedMasterKey: Buffer.from(credential.encryptedMasterKey).toString("base64"),
-            encryptedMasterKeyNonce: Buffer.from(credential.encryptedMasterKeyNonce).toString("base64"),
+                    encryptedMasterKey: credential.encryptedMasterKey,
+                    encryptedMasterKeyNonce: credential.encryptedMasterKeyNonce,
 
-            publicSignKey: Buffer.from(credential.user.publicSignKey).toString("base64"),
-            encryptedPrivateSignKey: Buffer.from(credential.user.encryptedPrivateSignKey).toString("base64"),
-            encryptedPrivateSignKeyNonce: Buffer.from(credential.user.encryptedPrivateSignKeyNonce).toString("base64"),
+                    publicSignKey: credential.user.publicSignKey,
+                    encryptedPrivateSignKey: credential.user.encryptedPrivateSignKey,
+                    encryptedPrivateSignKeyNonce: credential.user.encryptedPrivateSignKeyNonce,
 
-            publicDataKey: Buffer.from(credential.user.publicDataKey).toString("base64"),
-            encryptedPrivateDataKey: Buffer.from(credential.user.encryptedPrivateDataKey).toString("base64"),
-            encryptedPrivateDataKeyNonce: Buffer.from(credential.user.encryptedPrivateDataKeyNonce).toString("base64"),
+                    publicDataKey: credential.user.publicDataKey,
+                    encryptedPrivateDataKey: credential.user.encryptedPrivateDataKey,
+                    encryptedPrivateDataKeyNonce: credential.user.encryptedPrivateDataKeyNonce,
+                },
+            },
         };
     }
 
@@ -547,8 +597,12 @@ class CryptServer {
         return user;
     }
 
-    private async handleGetChallenge(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<GetChallengeResponse> {
-        // const json = await this.parseBodyJsonValidated(req, GetChallengeRequestSchema);
+    private async handleGetChallenge(
+        url: URL,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<MessageInitShape<typeof GetChallengeResponseSchema>> {
+        // const _data = await this.parseBodyProtoValidated(req, GetChallengeRequestSchema);
 
         const MAX_CHALLENGE_SOLVE_TIME = 15;
 
@@ -561,7 +615,12 @@ class CryptServer {
         const signedChallenge = nacl.sign(challenge, this.challengeSignKeyPair.secretKey);
 
         return {
-            serverSignedChallenge: Buffer.from(signedChallenge).toString("base64"),
+            response: {
+                case: "ok",
+                value: {
+                    serverSignedChallenge: signedChallenge,
+                },
+            },
         };
     }
 }

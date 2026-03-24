@@ -3,8 +3,16 @@ import {} from "./types";
 import nacl from "tweetnacl";
 import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from "tweetnacl-util";
 import { naclBoxEphemeral, deriveKey } from "./crypto";
-import { LoginRequest, LoginRequestSchema, LoginResponse } from "./generated/protocol_pb";
-import { create, MessageInitShape } from "@bufbuild/protobuf";
+import {
+    ErrorCode,
+    LoginRequest,
+    LoginRequestSchema,
+    LoginResponse,
+    LoginResponseSchema,
+    RegisterRequestSchema,
+    RegisterResponseSchema,
+} from "./generated/protocol_pb";
+import { create, DescMessage, fromBinary, MessageInitShape, MessageShape, toBinary } from "@bufbuild/protobuf";
 
 export * from "./types";
 export * from "./crypto";
@@ -23,6 +31,40 @@ export class CryptClient {
     constructor(appName: string, url: string) {
         this.appName = appName;
         this.url = url;
+    }
+
+    private async fetchProto<Req extends DescMessage, Res extends DescMessage>(
+        method: string,
+        path: string,
+        requestSchema: Req,
+        responseSchema: Res,
+        body: MessageInitShape<Req>
+    ): Promise<MessageShape<Res>> {
+        let res: Response;
+
+        if (method === "GET") {
+            res = await fetch(this.url + path, {
+                method: "GET",
+            });
+        } else {
+            const msg = create(requestSchema, body);
+            res = await fetch(this.url + path, {
+                method: method,
+                headers: {
+                    "Content-Type": "application/octet-stream",
+                },
+                body: toBinary(requestSchema, msg),
+            });
+        }
+
+        if (!res.ok) {
+            throw new Error("Could not fetch " + path + ": " + res.status);
+        }
+
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        const parsed = fromBinary(responseSchema, bytes);
+
+        return parsed;
     }
 
     private async fetchJson<Req, Res>(method: string, path: string, body?: Req) {
@@ -66,68 +108,51 @@ export class CryptClient {
         const authPassword = await deriveKey(passwordBytes, authenticationSalt, nacl.secretbox.keyLength);
         const masterKeyPassword = await deriveKey(passwordBytes, keySalt, nacl.secretbox.keyLength);
 
-        // create(LoginRequestSchema, {
-        //     method: {
-        //         case: "password",
-        //         value: {
-        //             identifier: identifier,
-        //             password: encodeBase64(authPassword),
-        //         },
-        //     },
-        // });
-
-        const res = await this.fetchJson<LoginRequest, LoginResponse>("POST", "/login", {
+        const res = await this.fetchProto("POST", "/login", LoginRequestSchema, LoginResponseSchema, {
             method: {
                 case: "password",
                 value: {
                     identifier: identifier,
-                    password: encodeBase64(authPassword),
+                    password: authPassword,
                 },
             },
         });
 
-        if (res.status !== "ok") {
-            throw new Error("Could not log in using password: " + res.status);
+        if (res.response.case != "ok") {
+            throw new Error("Could not log in using password: " + ErrorCode[res.response.value!.errorCode]);
         }
 
-        const encryptedMasterKey = decodeBase64(res.encryptedMasterKey);
-        const encryptedMasterKeyNonce = decodeBase64(res.encryptedMasterKeyNonce);
+        const okResponse = res.response.value!;
 
-        const masterKey = nacl.secretbox.open(encryptedMasterKey, encryptedMasterKeyNonce, masterKeyPassword);
+        const masterKey = nacl.secretbox.open(okResponse.encryptedMasterKey, okResponse.encryptedMasterKeyNonce, masterKeyPassword);
         if (!masterKey) {
             throw new Error("Could not decrypt master key");
         }
 
-        const publicSignKey = decodeBase64(res.publicSignKey);
-        const encryptedPrivateSignKey = decodeBase64(res.encryptedPrivateSignKey);
-        const encryptedPrivateSignKeyNonce = decodeBase64(res.encryptedPrivateSignKeyNonce);
-        const privateSignKey = nacl.secretbox.open(encryptedPrivateSignKey, encryptedPrivateSignKeyNonce, masterKey);
+        const privateSignKey = nacl.secretbox.open(okResponse.encryptedPrivateSignKey, okResponse.encryptedPrivateSignKeyNonce, masterKey);
         if (!privateSignKey) {
             throw new Error("Could not decrypt private sign key using master key");
         }
 
-        const publicDataKey = decodeBase64(res.publicDataKey);
-        const encryptedPrivateDataKey = decodeBase64(res.encryptedPrivateDataKey);
-        const encryptedPrivateDataKeyNonce = decodeBase64(res.encryptedPrivateDataKeyNonce);
-        const privateDataKey = nacl.secretbox.open(encryptedPrivateDataKey, encryptedPrivateDataKeyNonce, masterKey);
+        const privateDataKey = nacl.secretbox.open(okResponse.encryptedPrivateDataKey, okResponse.encryptedPrivateDataKeyNonce, masterKey);
         if (!privateDataKey) {
             throw new Error("Could not decrypt private data key using master key");
         }
 
         this.signKeyPair = {
             private: privateSignKey,
-            public: publicSignKey,
+            public: okResponse.publicSignKey,
         };
         this.dataKeyPair = {
             private: privateDataKey,
-            public: publicDataKey,
+            public: okResponse.publicDataKey,
         };
 
         console.log("Succesfully authenticated using password", res, {
             privateSignKey,
-            publicSignKey,
+            publicSignKey: okResponse.publicSignKey,
             privateDataKey,
-            publicDataKey,
+            publicDataKey: okResponse.publicDataKey,
         });
     }
 
@@ -158,31 +183,36 @@ export class CryptClient {
         const collectionKeypair = nacl.box.keyPair();
         const collectionEncryptedPrivateKey = naclBoxEphemeral(collectionKeypair.secretKey, groupKeypair.publicKey);
 
-        const res = await this.fetchJson<z.infer<typeof RegisterRequestSchema>, RegisterResponse>("POST", "/register", {
-            method: "password",
-            identifier: identifier,
-            password: encodeBase64(authPassword),
+        const res = await this.fetchProto("POST", "/register", RegisterRequestSchema, RegisterResponseSchema, {
+            method: {
+                case: "password",
+                value: {
+                    identifier: identifier,
+                    password: authPassword,
+                    keys: {
+                        encryptedMasterKey: encryptedMasterKey,
+                        encryptedMasterKeyNonce: encryptedMasterKeyNonce,
 
-            encryptedMasterKey: encodeBase64(encryptedMasterKey),
-            encryptedMasterKeyNonce: encodeBase64(encryptedMasterKeyNonce),
+                        publicDataKey: userKeypair.publicKey,
+                        encryptedPrivateDataKey: userEncryptedPrivateKey,
+                        encryptedPrivateDataKeyNonce: userEncryptedPrivateKeyNonce,
 
-            publicDataKey: encodeBase64(userKeypair.publicKey),
-            encryptedPrivateDataKey: encodeBase64(userEncryptedPrivateKey),
-            encryptedPrivateDataKeyNonce: encodeBase64(userEncryptedPrivateKeyNonce),
+                        publicSignKey: userSignKeypair.publicKey,
+                        encryptedPrivateSignKey: userEncryptedPrivateSignKey,
+                        encryptedPrivateSignKeyNonce: userEncryptedPrivateSignKeyNonce,
 
-            publicSignKey: encodeBase64(userSignKeypair.publicKey),
-            encryptedPrivateSignKey: encodeBase64(userEncryptedPrivateSignKey),
-            encryptedPrivateSignKeyNonce: encodeBase64(userEncryptedPrivateSignKeyNonce),
+                        groupPublicKey: groupKeypair.publicKey,
+                        groupEncryptedPrivateKey: groupEncryptedPrivateKey,
 
-            groupPublicKey: encodeBase64(groupKeypair.publicKey),
-            groupEncryptedPrivateKey: encodeBase64(groupEncryptedPrivateKey),
-
-            collectionPublicKey: encodeBase64(collectionKeypair.publicKey),
-            collectionEncryptedPrivateKey: encodeBase64(collectionEncryptedPrivateKey),
+                        collectionPublicKey: collectionKeypair.publicKey,
+                        collectionEncryptedPrivateKey: collectionEncryptedPrivateKey,
+                    },
+                },
+            },
         });
 
-        if (res.status !== "ok") {
-            throw new Error("Error during registration: " + res.status);
+        if (res.response.case !== "ok") {
+            throw new Error("Error during registration: " + res.response.value!.errorCode);
         }
 
         this.signKeyPair = {
@@ -194,6 +224,6 @@ export class CryptClient {
             public: userKeypair.publicKey,
         };
 
-        console.log("Register ok", res);
+        console.log("Register ok", res.response.value.token);
     }
 }

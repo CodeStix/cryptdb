@@ -3,178 +3,133 @@ package auth;
 
 import "buf/validate/validate.proto";
 
-// ─── Shared key material (common to both register variants) ──────────────────
-
-message KeyMaterial {
-  bytes encrypted_master_key = 1 [
-    (buf.validate.field).bytes.len = 48   // box.secretKeyLength(32) + secretbox.overheadLength(16)
-  ];
-  bytes encrypted_master_key_nonce = 2 [
-    (buf.validate.field).bytes.len = 16   // secretbox.nonceLength
-  ];
-
-  bytes public_sign_key = 3 [
-    (buf.validate.field).bytes.len = 32   // sign.publicKeyLength
-  ];
-  bytes encrypted_private_sign_key = 4 [
-    (buf.validate.field).bytes.len = 80   // sign.secretKeyLength(64) + secretbox.overheadLength(16)
-  ];
-  bytes encrypted_private_sign_key_nonce = 5 [
-    (buf.validate.field).bytes.len = 16
-  ];
-
-  bytes public_data_key = 6 [
-    (buf.validate.field).bytes.len = 32
-  ];
-  bytes encrypted_private_data_key = 7 [
-    (buf.validate.field).bytes.len = 48   // box.secretKeyLength(32) + secretbox.overheadLength(16)
-  ];
-  bytes encrypted_private_data_key_nonce = 8 [
-    (buf.validate.field).bytes.len = 16
-  ];
-
-  bytes group_public_key = 9 [
-    (buf.validate.field).bytes.len = 32
-  ];
-  bytes group_encrypted_private_key = 10 [
-    // box.secretKeyLength(32) + box.overheadLength(16) + NACL_EPHEMERAL_BOX_OVERHEAD
-    (buf.validate.field).bytes.min_len = 80
-  ];
-
-  bytes collection_public_key = 11 [
-    (buf.validate.field).bytes.len = 32
-  ];
-  bytes collection_encrypted_private_key = 12 [
-    // same as group_encrypted_private_key
-    (buf.validate.field).bytes.min_len = 48
-  ];
+enum ErrorCode {
+    UNSPECIFIED              = 0;
+    OK                       = 1;
+    UNKNOWN_CREDENTIAL       = 2;
+    WRONG_PASSWORD           = 3;
+    INVALID_METHOD           = 4;
+    INVALID_SERVER_SIGNATURE = 5;
+    CHALLENGE_EXPIRED        = 6;
+    INVALID_CLIENT_SIGNATURE = 7;
+    INVALID_PUBLIC_DATA_KEY  = 8;
+    INVALID_PUBLIC_CHALLENGE_KEY = 9;
 }
 
-// ─── Register ────────────────────────────────────────────────────────────────
-
-message PublicKeyRegisterRequest {
-  string identifier = 1 [
-    (buf.validate.field).string.min_len = 1
-  ];
-  bytes public_key = 2 [
-    (buf.validate.field).bytes.len = 32   // sign.publicKeyLength
-  ];
-  bytes client_server_signed_challenge = 3 [
-    (buf.validate.field).bytes.min_len = 16,
-    (buf.validate.field).bytes.max_len = 128
-  ];
-  KeyMaterial key_material = 4 [
-    (buf.validate.field).required = true
-  ];
+message ErrorResponse {
+    ErrorCode error_code = 1;
+    optional string message = 2;
 }
 
-message PasswordRegisterRequest {
-  string identifier = 1 [
-    (buf.validate.field).string.min_len = 1
-  ];
-  string password = 2 [
-    (buf.validate.field).string.min_len = 1
-  ];
-  KeyMaterial key_material = 3 [
-    (buf.validate.field).required = true
-  ];
-}
+// Register
 
 message RegisterRequest {
-  oneof method {
-    option (buf.validate.oneof).required = true;
-    PublicKeyRegisterRequest public_key = 1;
-    PasswordRegisterRequest  password   = 2;
-  }
-}
 
-// ─── Register response ───────────────────────────────────────────────────────
+    message RegisterKeyMaterial {
+      bytes encrypted_master_key = 1                [(buf.validate.field).bytes.len = 48];  // box.secretKeyLength(32) + secretbox.overheadLength(16)
+      bytes encrypted_master_key_nonce = 2          [(buf.validate.field).bytes.len = 24];  // secretbox.nonceLength
+    
+      bytes public_sign_key = 3                     [(buf.validate.field).bytes.len = 32];  // sign.publicKeyLength
+      bytes encrypted_private_sign_key = 4          [(buf.validate.field).bytes.len = 80];  // sign.secretKeyLength(64) + secretbox.overheadLength(16)
+      bytes encrypted_private_sign_key_nonce = 5    [(buf.validate.field).bytes.len = 24];
+    
+      bytes public_data_key = 6                     [(buf.validate.field).bytes.len = 32];
+      bytes encrypted_private_data_key = 7          [(buf.validate.field).bytes.len = 48];  // box.secretKeyLength(32) + secretbox.overheadLength(16)
+      bytes encrypted_private_data_key_nonce = 8    [(buf.validate.field).bytes.len = 24];
+    
+      bytes group_public_key = 9                    [(buf.validate.field).bytes.len = 32];
+      bytes group_encrypted_private_key = 10        [(buf.validate.field).bytes.len = 80];  // box.secretKeyLength(32) + box.overheadLength(16) + NACL_EPHEMERAL_BOX_OVERHEAD
+    
+      bytes collection_public_key = 11              [(buf.validate.field).bytes.len = 32];
+      bytes collection_encrypted_private_key = 12   [(buf.validate.field).bytes.len = 80];  // box.secretKeyLength(32) + box.overheadLength(16) + NACL_EPHEMERAL_BOX_OVERHEAD
+    }
 
-enum RegisterStatus {
-  REGISTER_STATUS_UNSPECIFIED            = 0;
-  REGISTER_STATUS_OK                     = 1;
-  REGISTER_STATUS_INVALID_PUBLIC_DATA_KEY      = 2;
-  REGISTER_STATUS_INVALID_PUBLIC_CHALLENGE_KEY = 3;
-  REGISTER_STATUS_INVALID_SERVER_SIGNATURE     = 4;
-  REGISTER_STATUS_CHALLENGE_EXPIRED            = 5;
-  REGISTER_STATUS_INVALID_CLIENT_SIGNATURE     = 6;
+    message PublicKeyRegisterRequest {
+        string identifier = 1                     [(buf.validate.field).string.min_len = 1];
+        bytes public_key = 2                      [(buf.validate.field).bytes.len = 32]; // sign.publicKeyLength
+        bytes client_server_signed_challenge = 3  [(buf.validate.field).bytes.min_len = 16, (buf.validate.field).bytes.max_len = 128];
+        RegisterKeyMaterial keys = 4              [(buf.validate.field).required = true];
+    }
+    
+    message PasswordRegisterRequest {
+        string identifier = 1           [(buf.validate.field).string.min_len = 1];
+        bytes password = 2              [(buf.validate.field).bytes.len = 32];
+        RegisterKeyMaterial keys = 3    [(buf.validate.field).required = true];
+    }
+
+    oneof method {
+        option (buf.validate.oneof).required = true;
+        PublicKeyRegisterRequest public_key = 1;
+        PasswordRegisterRequest  password   = 2;
+    }
 }
 
 message RegisterResponse {
-  RegisterStatus status = 1;
-  string token = 2;   // only set when status = OK
+    message RegisterOkResponse {
+        string token = 1;   
+    }
+
+    oneof response {
+        ErrorResponse error = 1;
+        RegisterOkResponse ok = 2;
+    }
 }
 
-// ─── Challenge ───────────────────────────────────────────────────────────────
+// GetChallenge
+
+message GetChallengeRequest {
+
+}
 
 message GetChallengeResponse {
-  bytes server_signed_challenge = 1 [
-    (buf.validate.field).bytes.min_len = 1
-  ];
+    message GetChallengeOkResponse {
+        bytes server_signed_challenge = 1;
+    }
+
+    oneof response {
+        ErrorResponse error = 1;
+        GetChallengeOkResponse ok = 2;
+    }
 }
 
-// ─── Login ───────────────────────────────────────────────────────────────────
-
-message PublicKeyLoginRequest {
-  string identifier = 1 [
-    (buf.validate.field).string.min_len = 8,
-    (buf.validate.field).string.max_len = 64
-  ];
-  bytes client_server_signed_challenge = 2 [
-    (buf.validate.field).bytes.min_len = 16,
-    (buf.validate.field).bytes.max_len = 128
-  ];
-}
-
-message PasswordLoginRequest {
-  string identifier = 1 [
-    (buf.validate.field).string.min_len = 8,
-    (buf.validate.field).string.max_len = 64
-  ];
-  // PBKDF2(password, salt: username + "random pepper 1")
-  string password = 2 [
-    (buf.validate.field).string.min_len = 8,
-    (buf.validate.field).string.max_len = 64
-  ];
-}
+// Login
 
 message LoginRequest {
-  oneof method {
-    option (buf.validate.oneof).required = true;
-    PublicKeyLoginRequest public_key = 1;
-    PasswordLoginRequest  password   = 2;
-  }
-}
+    message PublicKeyLoginRequest {
+        string identifier = 1                         [(buf.validate.field).string.min_len = 8, (buf.validate.field).string.max_len = 64];
+        bytes client_server_signed_challenge = 2      [(buf.validate.field).bytes.min_len = 16, (buf.validate.field).bytes.max_len = 128];
+    }
+    
+    message PasswordLoginRequest {
+        string identifier = 1         [(buf.validate.field).string.min_len = 8, (buf.validate.field).string.max_len = 64];
+        bytes password = 2            [(buf.validate.field).bytes.len = 32];
+    }
 
-// ─── Login response ──────────────────────────────────────────────────────────
-
-enum LoginStatus {
-  LOGIN_STATUS_UNSPECIFIED              = 0;
-  LOGIN_STATUS_OK                       = 1;
-  LOGIN_STATUS_UNKNOWN_CREDENTIAL       = 2;
-  LOGIN_STATUS_WRONG_PASSWORD           = 3;
-  LOGIN_STATUS_INVALID_METHOD           = 4;
-  LOGIN_STATUS_INVALID_SERVER_SIGNATURE = 5;
-  LOGIN_STATUS_CHALLENGE_EXPIRED        = 6;
-  LOGIN_STATUS_INVALID_CLIENT_SIGNATURE = 7;
-}
-
-message LoginResponseOkData {
-  string token = 1;
-
-  bytes encrypted_master_key       = 2;
-  bytes encrypted_master_key_nonce = 3;
-
-  // All private keys encrypted with master key
-  bytes public_sign_key                  = 4;
-  bytes encrypted_private_sign_key       = 5;
-  bytes encrypted_private_sign_key_nonce = 6;
-  bytes public_data_key                  = 7;
-  bytes encrypted_private_data_key       = 8;
-  bytes encrypted_private_data_key_nonce = 9;
+    oneof method {
+        option (buf.validate.oneof).required = true;
+        PublicKeyLoginRequest public_key = 1;
+        PasswordLoginRequest  password   = 2;
+    }
 }
 
 message LoginResponse {
-  LoginStatus status = 1;
-  LoginResponseOkData data = 2;  // only populated when status = OK
+    message LoginResponseOkData {
+        string token = 1;
+        
+        bytes encrypted_master_key       = 2;
+        bytes encrypted_master_key_nonce = 3;
+        
+        // All private keys encrypted with master key
+        bytes public_sign_key                  = 4;
+        bytes encrypted_private_sign_key       = 5;
+        bytes encrypted_private_sign_key_nonce = 6;
+        bytes public_data_key                  = 7;
+        bytes encrypted_private_data_key       = 8;
+        bytes encrypted_private_data_key_nonce = 9;
+    }
+
+    oneof response {
+        ErrorResponse error = 1;
+        LoginResponseOkData ok = 2;
+    }
 }
