@@ -22,6 +22,8 @@ import {
     GetObjectRequestSchema,
     CreateObjectRequestSchema,
     CreateObjectResponseSchema,
+    protoObjectToObject,
+    objectToProtoObject,
 } from "cryptdb-client";
 import { GroupRole, PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -34,10 +36,10 @@ import console, { timeStamp } from "console";
 import { createValidator } from "@bufbuild/protovalidate";
 import { DescMessage, fromBinary, create, MessageShape, MessageInitShape, toBinary } from "@bufbuild/protobuf";
 import { ToTuple } from "@prisma/client/runtime/client";
+import { decodeBase64 } from "tweetnacl-util";
 
 const JWT_EXPIRE_IN = 18 * 60 * 60;
 const MAX_PRIVATE_DATA_LENGTH = 1000;
-const MAX_PUBLIC_DATA_LENGTH = 1000;
 
 type CryptToken = {
     uid: number;
@@ -153,10 +155,20 @@ class CryptServer {
         });
     }
 
-    private async parseBodyProtoValidated<Desc extends DescMessage>(req: http.IncomingMessage, schema: Desc): Promise<MessageShape<Desc>> {
+    private async parseBodyProtoValidated<Desc extends DescMessage>(url: URL, req: http.IncomingMessage, schema: Desc): Promise<MessageShape<Desc>> {
         const validator = createValidator();
 
-        const buffer = await this.parseBodyBytes(req);
+        let buffer;
+        if (req.method === "GET") {
+            const urlEncoded = url.searchParams.get("data");
+            if (!urlEncoded) {
+                throw new Error("URL encoded data is empty");
+            }
+            console.log("urlEncoded", urlEncoded);
+            buffer = Buffer.from(decodeBase64(urlEncoded));
+        } else {
+            buffer = await this.parseBodyBytes(req);
+        }
 
         console.log("===>", buffer.toString("hex"), buffer.length);
 
@@ -286,8 +298,12 @@ class CryptServer {
 
     private ensureHttpMethod(req: http.IncomingMessage, method: string) {
         if (req.method !== method) {
-            throw new Error("Unsupported HTTP method");
+            this.throwInvalidHttpMethod();
         }
+    }
+
+    private throwInvalidHttpMethod(): never {
+        throw new Error("Unsupported HTTP method");
     }
 
     private async handleUrl(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -323,8 +339,13 @@ class CryptServer {
             }
 
             case "/object": {
-                this.ensureHttpMethod(req, "POST");
-                this.respondWithProto(res, GetObjectResponseSchema, await this.handleGetObject(url, req, res));
+                if (req.method === "GET") {
+                    this.respondWithProto(res, GetObjectResponseSchema, await this.handleGetObject(url, req, res));
+                } else if (req.method === "POST") {
+                    this.respondWithProto(res, CreateObjectResponseSchema, await this.handleCreateObject(url, req, res));
+                } else {
+                    this.throwInvalidHttpMethod();
+                }
                 break;
             }
 
@@ -341,7 +362,7 @@ class CryptServer {
         req: http.IncomingMessage,
         res: http.ServerResponse
     ): Promise<MessageInitShape<typeof RegisterResponseSchema>> {
-        const data = await this.parseBodyProtoValidated(req, RegisterRequestSchema);
+        const data = await this.parseBodyProtoValidated(url, req, RegisterRequestSchema);
 
         console.log("data", data);
 
@@ -533,7 +554,7 @@ class CryptServer {
     }
 
     private async handleLogin(url: URL, req: http.IncomingMessage, res: http.ServerResponse): Promise<MessageInitShape<typeof LoginResponseSchema>> {
-        const data = await this.parseBodyProtoValidated(req, LoginRequestSchema);
+        const data = await this.parseBodyProtoValidated(url, req, LoginRequestSchema);
 
         const credential = await this.prisma.userKey.findUnique({
             where: {
@@ -594,12 +615,12 @@ class CryptServer {
 
     private async ensureUser(req: http.IncomingMessage, url: URL) {
         let token: string | null;
-        if (req.method === "POST") {
-            const auth = req.headers["authorization"];
-            token = auth ? auth.slice("Bearer ".length) : null;
-        } else {
-            token = url.searchParams.get("token");
-        }
+        // if (req.method === "POST") {
+        const auth = req.headers["authorization"];
+        token = auth ? auth.slice("Bearer ".length) : null;
+        // } else {
+        // token = url.searchParams.get("token");
+        // }
 
         console.log("Found token", token);
 
@@ -673,7 +694,7 @@ class CryptServer {
         req: http.IncomingMessage,
         res: http.ServerResponse
     ): Promise<MessageInitShape<typeof GetGroupResponseSchema>> {
-        const data = await this.parseBodyProtoValidated(req, GetGroupRequestSchema);
+        const data = await this.parseBodyProtoValidated(url, req, GetGroupRequestSchema);
         const user = await this.ensureUser(req, url);
 
         const group = await this.prisma.group.findUnique({
@@ -742,7 +763,7 @@ class CryptServer {
         req: http.IncomingMessage,
         res: http.ServerResponse
     ): Promise<MessageInitShape<typeof GetCollectionResponseSchema>> {
-        const data = await this.parseBodyProtoValidated(req, GetCollectionRequestSchema);
+        const data = await this.parseBodyProtoValidated(url, req, GetCollectionRequestSchema);
         const user = await this.ensureUser(req, url);
 
         const collection = await this.prisma.collection.findUnique({
@@ -841,8 +862,9 @@ class CryptServer {
         req: http.IncomingMessage,
         res: http.ServerResponse
     ): Promise<MessageInitShape<typeof GetObjectResponseSchema>> {
-        const data = await this.parseBodyProtoValidated(req, GetObjectRequestSchema);
+        console.log("req", req.headers);
         const user = await this.ensureUser(req, url);
+        const data = await this.parseBodyProtoValidated(url, req, GetObjectRequestSchema);
 
         const object = await this.prisma.object.findUnique({
             where: {
@@ -905,7 +927,7 @@ class CryptServer {
                 id: object.id,
                 data: object.data,
                 nonce: object.nonce,
-                publicJson: JSON.stringify(object.publicData),
+                publicData: objectToProtoObject(object.publicData),
                 keys: object.collections.map((e) => ({
                     collectionId: e.collectionId,
                     encryptedObjectKey: e.encryptedObjectKey,
@@ -922,10 +944,8 @@ class CryptServer {
     ): Promise<MessageInitShape<typeof CreateObjectResponseSchema>> {
         const user = await this.ensureUser(req, url);
 
-        const data = await this.parseBodyProtoValidated(req, CreateObjectRequestSchema);
-        if (data.publicJson.length > MAX_PUBLIC_DATA_LENGTH) {
-            return createErrorMessage(ErrorCode.PUBLIC_DATA_TOO_LARGE);
-        }
+        const data = await this.parseBodyProtoValidated(url, req, CreateObjectRequestSchema);
+
         if (data.data.length > MAX_PRIVATE_DATA_LENGTH) {
             return createErrorMessage(ErrorCode.PRIVATE_DATA_TOO_LARGE);
         }
@@ -957,14 +977,14 @@ class CryptServer {
             return createErrorMessage(ErrorCode.PRIVATE_DATA_OUTDATED_KEY);
         }
 
-        const publicData = JSON.parse(data.publicJson);
+        const publicData = protoObjectToObject(data.publicData);
         // TODO: validate publicData
 
         const object = await this.prisma.object.create({
             data: {
                 data: data.data as Uint8Array<ArrayBuffer>,
                 nonce: data.nonce as Uint8Array<ArrayBuffer>,
-                publicData: publicData,
+                publicData: publicData as Record<string, string | number | string | boolean>, // TODO: doesn't support bigint and uint8array
                 tableName: data.tableName,
                 collections: {
                     create: {

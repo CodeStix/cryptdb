@@ -217,26 +217,40 @@ message ObjectResponse {
     uint64 id = 1;
     bytes data  = 2;
     bytes nonce = 3;
-    string public_json = 4; 
+    map<string, ObjectValue> public_data = 4;
     repeated Key keys = 5;
 }
 
 message GetObjectRequest {
-    uint64 id = 1;
+    string table_name = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 64];
+    uint64 id = 2;
+    // uint64 collection_id = 3;
 }
 
 message GetObjectResponse {
     ObjectResponse object = 1;
 }
 
+message ObjectValue {
+    oneof type {
+        int32 int = 1;
+        int64 long = 2;
+        string string = 3;
+        bytes bytes = 4;
+        double double = 5;
+        float float = 6;
+        bool bool = 7;
+    }
+}
+
 message CreateObjectRequest {
     string table_name = 1 [(buf.validate.field).string.min_len = 1, (buf.validate.field).string.max_len = 64];
     bytes data = 2; // Max length is validated server side
     bytes nonce = 3 [(buf.validate.field).bytes.len = 24];   
-    string public_json = 4; // Max length is validated server side
+    map<string, ObjectValue> public_data = 4; // Max length is validated server side
     uint64 collection_id = 5;
     int32 encrypted_using_key_version = 6;
-    bytes encrypted_object_key = 7 [(buf.validate.field).bytes.len = 64];
+    bytes encrypted_object_key = 7 [(buf.validate.field).bytes.len = 80];
 }
 
 message CreateObjectResponse {

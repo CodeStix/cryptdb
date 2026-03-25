@@ -23,12 +23,17 @@ import {
     RegisterRequest_RegisterKeyMaterialSchema,
     RegisterRequestSchema,
     RegisterResponseSchema,
+    CreateObjectRequestSchema,
+    CreateObjectResponseSchema,
+    ObjectValueSchema,
 } from "./generated/protocol_pb";
 import { create, DescMessage, fromBinary, MessageInitShape, MessageShape, toBinary } from "@bufbuild/protobuf";
 import en from "zod/v4/locales/en.js";
+import { objectToProtoObject, protoObjectToObject } from "./util";
 
 export * from "./types";
 export * from "./crypto";
+export * from "./util";
 export * from "./generated/protocol_pb";
 
 const AUTH_SALT_PREFIX = "ap";
@@ -148,6 +153,10 @@ export class Collection {
         this.data = res.collection;
     }
 
+    async getNewestKey(): Promise<KeyPair | null> {
+        return await this.getKey(this.getNewestKeyVersion());
+    }
+
     async getKey(version: number): Promise<KeyPair | null> {
         const cachedKey = this.cachedKeys.get(version);
         if (cachedKey) {
@@ -194,6 +203,90 @@ export class Collection {
 
         return keyPair;
     }
+
+    async getObjectRaw(tableName: string, id: ObjectId) {
+        const res = await this.client.fetchProto("GET", "/object", GetObjectRequestSchema, GetObjectResponseSchema, {
+            id: BigInt(id),
+            tableName: tableName,
+        });
+
+        if (!res.object) {
+            return null;
+        }
+
+        const encryptedKey = res.object.keys[0];
+        if (!encryptedKey) {
+            console.error("Object encryptedKey is empty");
+            return null;
+        }
+
+        const collection = await this.client.getCollection(encryptedKey.collectionId);
+        if (!collection) {
+            console.error("Collection for object not found", id, encryptedKey);
+            return;
+        }
+
+        const keyPair = await collection.getKey(encryptedKey.encryptedUsingKeyVersion);
+        if (!keyPair) {
+            console.error("Keypair for object not found", id, encryptedKey, collection);
+            return;
+        }
+
+        const objectKey = naclBoxEphemeralOpen(encryptedKey.encryptedObjectKey, keyPair.public, keyPair.private);
+        if (!objectKey) {
+            console.error("Could not decrypt object key", id, encryptedKey, collection);
+            return;
+        }
+
+        const publicData = protoObjectToObject(res.object.publicData);
+        const privateData = nacl.secretbox.open(res.object.data, res.object.nonce, objectKey);
+
+        // TODO: verify private data
+
+        return { publicData, privateData };
+    }
+
+    async createObjectRaw(tableName: string, privateData: Uint8Array, publicData: any): Promise<ObjectId> {
+        const protoObj = objectToProtoObject(publicData);
+
+        const key = nacl.randomBytes(nacl.secretbox.keyLength);
+        const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+        const encryptedData = nacl.secretbox(privateData, nonce, key);
+
+        while (true) {
+            const encryptionKey = await this.getNewestKey();
+            if (!encryptionKey) {
+                throw new Error("Could not get encryption key to create object");
+            }
+
+            const encryptedKey = naclBoxEphemeral(key, encryptionKey.public);
+
+            console.log("encryptedKey", encryptedKey.length);
+
+            const res = await this.client.fetchProto("POST", "/object", CreateObjectRequestSchema, CreateObjectResponseSchema, {
+                collectionId: BigInt(this.id),
+                data: encryptedData,
+                publicData: protoObj,
+                encryptedObjectKey: encryptedKey,
+                encryptedUsingKeyVersion: encryptionKey.version,
+                nonce: nonce,
+                tableName: tableName,
+            });
+
+            if (res.response.case !== "ok") {
+                if (res.response.value!.errorCode === ErrorCode.PRIVATE_DATA_OUTDATED_KEY) {
+                    console.warn("Refresing collection because key out of date");
+                    // Make sure the newest keys are available
+                    await this.refresh();
+                    continue;
+                }
+
+                throw new Error("Could not create object: " + res.response.value!.errorCode);
+            }
+
+            return res.response.value.id;
+        }
+    }
 }
 
 export class CryptClient {
@@ -224,25 +317,35 @@ export class CryptClient {
     ): Promise<MessageShape<Res>> {
         let res: Response;
 
+        const reqMsg = create(requestSchema, body);
+        const reqBytes = toBinary(requestSchema, reqMsg);
+
+        const headers: HeadersInit = {};
+        if (this.token) {
+            headers["Authorization"] = "Bearer " + this.token;
+        }
+
+        const params = new URLSearchParams();
+
         if (method === "GET") {
-            console.log("===>", method, this.url + path);
-            res = await fetch(this.url + path + (this.token ? "?token=" + encodeURIComponent(this.token) : ""), {
+            params.set("data", encodeBase64(reqBytes));
+        }
+
+        const url = this.url + path + (params.size > 0 ? "?" + params.toString() : "");
+        console.log("===>", method, url, encodeBase64(reqBytes));
+
+        if (method === "GET") {
+            res = await fetch(url, {
                 method: "GET",
+                headers: headers,
             });
         } else {
-            const msg = create(requestSchema, body);
-            const bytes = toBinary(requestSchema, msg);
-
-            console.log("===>", method, this.url + path, encodeBase64(bytes));
-
-            const headers: HeadersInit = {};
             headers["Content-Type"] = "application/octet-stream";
-            if (this.token) headers["Authorization"] = "Bearer " + this.token;
 
-            res = await fetch(this.url + path, {
+            res = await fetch(url, {
                 method: method,
                 headers: headers,
-                body: bytes,
+                body: reqBytes,
             });
         }
 
@@ -250,12 +353,12 @@ export class CryptClient {
             throw new Error("Could not fetch " + path + ": " + res.status);
         }
 
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        const parsed = fromBinary(responseSchema, bytes);
+        const resBytes = new Uint8Array(await res.arrayBuffer());
+        const resMsg = fromBinary(responseSchema, resBytes);
 
-        console.log("<===", method, this.url + path, encodeBase64(bytes));
+        console.log("<===", method, this.url + path, encodeBase64(resBytes));
 
-        return parsed;
+        return resMsg;
     }
 
     public async getKey(): Promise<KeyPair | null> {
@@ -506,44 +609,6 @@ export class CryptClient {
         this.cachedCollections.set(id, collection);
         await collection.refresh();
         return collection;
-    }
-
-    async getObject(id: ObjectId) {
-        const res = await this.fetchProto("POST", "/object", GetObjectRequestSchema, GetObjectResponseSchema, {
-            id: BigInt(id),
-        });
-
-        if (!res.object) {
-            return null;
-        }
-
-        const encryptedKey = res.object.keys[0];
-        if (!encryptedKey) {
-            console.error("Object encryptedKey is empty");
-            return null;
-        }
-
-        const collection = await this.getCollection(encryptedKey.collectionId);
-        if (!collection) {
-            console.error("Collection for object not found", id, encryptedKey);
-            return;
-        }
-
-        const keyPair = await collection.getKey(encryptedKey.encryptedUsingKeyVersion);
-        if (!keyPair) {
-            console.error("Keypair for object not found", id, encryptedKey, collection);
-            return;
-        }
-
-        const objectKey = naclBoxEphemeralOpen(encryptedKey.encryptedObjectKey, keyPair.public, keyPair.private);
-        if (!objectKey) {
-            console.error("Could not decrypt object key", id, encryptedKey, collection);
-            return;
-        }
-
-        console.log("object key", objectKey);
-
-        return res.object;
     }
 }
 

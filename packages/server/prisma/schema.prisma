@@ -9,7 +9,7 @@ datasource db {
   provider = "postgresql"
 }
 
-// INSERT INTO "TableDescriptor"("tableName","description") VALUES('Profile','{}');
+// INSERT INTO "TableDescriptor"("tableName","description") VALUES('Test','{}');
 // INSERT INTO "TablePermission"("tableName", "groupId", "canDelete", "canInsert", "canQuery", "canRead", "canUpdate") VALUES('Profile', 2, true, true, true, true, true);
 
 model UserKey {
