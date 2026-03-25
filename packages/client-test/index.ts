@@ -7,19 +7,19 @@ const client = new CryptClient("TestingApp", "http://localhost:8080");
 client.loginUsingPassword("stijnrogiest", "Vrijdag1@").then(async (v) => {
     console.log("logged in", v);
 
-    const collection = await client.getCollection(client.personalCollectionId!);
-    console.log("collection", collection);
+    // const collection = await client.getCollection(client.personalCollectionId!);
+    // console.log("collection", collection);
 
-    const key = await collection.getKey(collection.getNewestKeyVersion());
-    console.log("key", key);
+    // const key = await collection.getKey(collection.getNewestKeyVersion());
+    // console.log("key", key);
 
-    const group = await client.getGroup(client.personalGroupId!);
-    console.log("group", group);
+    // const group = await client.getGroup(client.personalGroupId!);
+    // console.log("group", group);
 
     // const obj = await collection.createObjectRaw("Test", new Uint8Array(8), {
     //     name: "stijn",
     // });
-    const obj = await collection.getObjectRaw("Test", 2n);
+    const obj = await client.getObjectRaw("Test", 2n);
 
     console.log("obj", obj);
 

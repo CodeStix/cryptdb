@@ -62,7 +62,7 @@ export class Group {
     }
 
     async refresh() {
-        const res = await this.client.fetchProto("POST", "/group", GetGroupRequestSchema, GetGroupResponseSchema, {
+        const res = await this.client.fetchProto("GET", "/group", GetGroupRequestSchema, GetGroupResponseSchema, {
             id: BigInt(this.id),
         });
 
@@ -141,7 +141,7 @@ export class Collection {
     }
 
     async refresh() {
-        const res = await this.client.fetchProto("POST", "/collection", GetCollectionRequestSchema, GetCollectionResponseSchema, {
+        const res = await this.client.fetchProto("GET", "/collection", GetCollectionRequestSchema, GetCollectionResponseSchema, {
             id: BigInt(this.id),
         });
 
@@ -202,48 +202,6 @@ export class Collection {
         this.cachedKeys.set(version, keyPair);
 
         return keyPair;
-    }
-
-    async getObjectRaw(tableName: string, id: ObjectId) {
-        const res = await this.client.fetchProto("GET", "/object", GetObjectRequestSchema, GetObjectResponseSchema, {
-            id: BigInt(id),
-            tableName: tableName,
-        });
-
-        if (!res.object) {
-            return null;
-        }
-
-        const encryptedKey = res.object.keys[0];
-        if (!encryptedKey) {
-            console.error("Object encryptedKey is empty");
-            return null;
-        }
-
-        const collection = await this.client.getCollection(encryptedKey.collectionId);
-        if (!collection) {
-            console.error("Collection for object not found", id, encryptedKey);
-            return;
-        }
-
-        const keyPair = await collection.getKey(encryptedKey.encryptedUsingKeyVersion);
-        if (!keyPair) {
-            console.error("Keypair for object not found", id, encryptedKey, collection);
-            return;
-        }
-
-        const objectKey = naclBoxEphemeralOpen(encryptedKey.encryptedObjectKey, keyPair.public, keyPair.private);
-        if (!objectKey) {
-            console.error("Could not decrypt object key", id, encryptedKey, collection);
-            return;
-        }
-
-        const publicData = protoObjectToObject(res.object.publicData);
-        const privateData = nacl.secretbox.open(res.object.data, res.object.nonce, objectKey);
-
-        // TODO: verify private data
-
-        return { publicData, privateData };
     }
 
     async createObjectRaw(tableName: string, privateData: Uint8Array, publicData: any): Promise<ObjectId> {
@@ -332,14 +290,17 @@ export class CryptClient {
         }
 
         const url = this.url + path + (params.size > 0 ? "?" + params.toString() : "");
-        console.log("===>", method, url, encodeBase64(reqBytes));
 
         if (method === "GET") {
+            console.log("===>", method, url);
+
             res = await fetch(url, {
                 method: "GET",
                 headers: headers,
             });
         } else {
+            console.log("===>", method, url, encodeBase64(reqBytes));
+
             headers["Content-Type"] = "application/octet-stream";
 
             res = await fetch(url, {
@@ -609,6 +570,48 @@ export class CryptClient {
         this.cachedCollections.set(id, collection);
         await collection.refresh();
         return collection;
+    }
+
+    async getObjectRaw(tableName: string, id: ObjectId) {
+        const res = await this.fetchProto("GET", "/object", GetObjectRequestSchema, GetObjectResponseSchema, {
+            id: BigInt(id),
+            tableName: tableName,
+        });
+
+        if (!res.object) {
+            return null;
+        }
+
+        const encryptedKey = res.object.keys[0];
+        if (!encryptedKey) {
+            console.error("Object encryptedKey is empty");
+            return null;
+        }
+
+        const collection = await this.getCollection(encryptedKey.collectionId);
+        if (!collection) {
+            console.error("Collection for object not found", id, encryptedKey);
+            return;
+        }
+
+        const keyPair = await collection.getKey(encryptedKey.encryptedUsingKeyVersion);
+        if (!keyPair) {
+            console.error("Keypair for object not found", id, encryptedKey, collection);
+            return;
+        }
+
+        const objectKey = naclBoxEphemeralOpen(encryptedKey.encryptedObjectKey, keyPair.public, keyPair.private);
+        if (!objectKey) {
+            console.error("Could not decrypt object key", id, encryptedKey, collection);
+            return;
+        }
+
+        const publicData = protoObjectToObject(res.object.publicData);
+        const privateData = nacl.secretbox.open(res.object.data, res.object.nonce, objectKey);
+
+        // TODO: verify private data
+
+        return { publicData, privateData };
     }
 }
 

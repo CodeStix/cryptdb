@@ -327,13 +327,13 @@ class CryptServer {
             }
 
             case "/group": {
-                this.ensureHttpMethod(req, "POST");
+                this.ensureHttpMethod(req, "GET");
                 this.respondWithProto(res, GetGroupResponseSchema, await this.handleGetGroup(url, req, res));
                 break;
             }
 
             case "/collection": {
-                this.ensureHttpMethod(req, "POST");
+                this.ensureHttpMethod(req, "GET");
                 this.respondWithProto(res, GetCollectionResponseSchema, await this.handleGetCollection(url, req, res));
                 break;
             }
