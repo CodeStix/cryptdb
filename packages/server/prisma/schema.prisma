@@ -84,7 +84,7 @@ model GroupUserKey {
 // When a user is removed from a group:
 // -> The group keypair must be regenerated
 // -> The new keypair is encrypted for each remaining user
-// -> TODO: store a signed signature of the remaining users, otherwise the server can fake it
+// -> Store a signed hash of the remaining users, including their public key, role and user id
 // -> Each collection under the group must be flagged as 'to-be-key-rotated'
 // -> Each object under the group collections must be flaged as 'to-be-key-rotated'
 // -> The old keypair must also be stored so that remaining collections can still can decrypt and update the previous private key
@@ -107,6 +107,12 @@ model Group {
   keys                GroupUserKey[]
   groupCollectionKeys GroupCollectionKey[]
 }
+
+// model GroupLogEntry {
+//   entryId 
+//   groupId BigInt 
+
+// }
 
 model GroupCollection {
   groupId      BigInt
@@ -223,3 +229,18 @@ model TablePermission {
 //   Delete // user ccan delete rows that it has access to
 //   Share // user can share rows that it has access to with group (certain groups)
 // }
+
+// a key for an object must be regenerated if any of its collections keypair has changed or if a collection is removed from the object (verify all collections first)
+// 
+
+// a keypair for a collection must be regenerated if any of its groups keypair has changed or if a group is removed from the collection (verify all groups first)
+// a collection can be verified if the sign(hash({publicKey, version, ...list of groups})) can be verified by a known admin group key (??? is storing needed or is implied verified groups enough ???)
+
+// a keypair for a group must be regenerated if any of its users keypair has changed or if a user is removed from the group
+// a group can be verified if the sign(hash({publicKey, version, ...list of users})) can be verified by a known admin key (stored on first group download)
+
+// when a group is downloaded for the first time, the client stores the public sign keys of the group admins. 
+// so that the server replaces the whole state after this moment, it would only be possible if the server has the group admin keypair
+
+// when a group is created, the creating user signs the first log entry with their signature
+// in the log entry is contained: a list of users

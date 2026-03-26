@@ -26,10 +26,12 @@ import {
     CreateObjectRequestSchema,
     CreateObjectResponseSchema,
     ObjectValueSchema,
+    PrivateObjectDataSchema,
 } from "./generated/protocol_pb";
 import { create, DescMessage, fromBinary, MessageInitShape, MessageShape, toBinary } from "@bufbuild/protobuf";
 import en from "zod/v4/locales/en.js";
 import { objectToProtoObject, protoObjectToObject } from "./util";
+import { walk as canonicalJsonWalk } from "canonical-json";
 
 export * from "./types";
 export * from "./crypto";
@@ -44,6 +46,16 @@ type KeyPair = {
     private: Uint8Array;
     public: Uint8Array;
 };
+
+// type GroupRoster = {
+//     groupId:   bigint
+//     epoch:     number
+//     members: {
+//       userId:    bigint
+//       publicKey: Uint8Array  // bind identity to their current public key
+//       role:      string
+//     }[]  // sorted by userId ascending
+//   }
 
 export class Group {
     readonly id: GroupId;
@@ -60,6 +72,14 @@ export class Group {
     hasKey(version: number) {
         return this.data.keys.some((e) => e.version === version);
     }
+
+    generateRoster() {
+        // this.data.
+    }
+
+    // setData(data: GroupResponse) {
+    //     this.data = data;
+    // }
 
     async refresh() {
         const res = await this.client.fetchProto("GET", "/group", GetGroupRequestSchema, GetGroupResponseSchema, {
@@ -140,6 +160,10 @@ export class Collection {
         return this.data.keys.some((e) => e.version === version);
     }
 
+    // setData(data: CollectionResponse) {
+    //     this.data = data;
+    // }
+
     async refresh() {
         const res = await this.client.fetchProto("GET", "/collection", GetCollectionRequestSchema, GetCollectionResponseSchema, {
             id: BigInt(this.id),
@@ -156,6 +180,20 @@ export class Collection {
     async getNewestKey(): Promise<KeyPair | null> {
         return await this.getKey(this.getNewestKeyVersion());
     }
+
+    // async rotateKey() {
+    //     this.getNewestKeyVersion();
+
+    //     // TODO: verify this.data.groups using signature
+
+    //     const collectionKeyPair = nacl.box.keyPair();
+
+    //     for (const group of this.data.groups) {
+    //         group.$unknown;
+    //     }
+
+    //     const collectionEncryptedPrivateKey = naclBoxEphemeral(collectionKeyPair.secretKey, groupKeyPair.publicKey);
+    // }
 
     async getKey(version: number): Promise<KeyPair | null> {
         const cachedKey = this.cachedKeys.get(version);
@@ -204,12 +242,11 @@ export class Collection {
         return keyPair;
     }
 
-    async createObjectRaw(tableName: string, privateData: Uint8Array, publicData: any): Promise<ObjectId> {
+    async createObjectRaw(tableName: string, privateData: any, publicData: any): Promise<ObjectId> {
         const protoObj = objectToProtoObject(publicData);
 
         const key = nacl.randomBytes(nacl.secretbox.keyLength);
         const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
-        const encryptedData = nacl.secretbox(privateData, nonce, key);
 
         while (true) {
             const encryptionKey = await this.getNewestKey();
@@ -218,6 +255,20 @@ export class Collection {
             }
 
             const encryptedKey = naclBoxEphemeral(key, encryptionKey.public);
+
+            const data = toBinary(
+                PrivateObjectDataSchema,
+                create(PrivateObjectDataSchema, {
+                    privateData: objectToProtoObject(privateData),
+                    collections: [
+                        {
+                            collectionId: BigInt(this.id),
+                            keyVersion: encryptionKey.version,
+                        },
+                    ],
+                })
+            );
+            const encryptedData = nacl.secretbox(data, nonce, key);
 
             console.log("encryptedKey", encryptedKey.length);
 
@@ -244,6 +295,15 @@ export class Collection {
 
             return res.response.value.id;
         }
+    }
+
+    async rotateObjectKey(tableName: string, id: ObjectId) {
+        const res = await this.client.fetchProto("GET", "/object", GetObjectRequestSchema, GetObjectResponseSchema, {
+            id: BigInt(id),
+            tableName: tableName,
+        });
+
+        res.object?.data;
     }
 }
 
@@ -572,6 +632,21 @@ export class CryptClient {
         return collection;
     }
 
+    // async getCollections(ids: CollectionId[]) {
+    //     const res = await this.fetchProto("GET", "/collection", GetCollectionRequestSchema, GetCollectionResponseSchema, {
+    //         ids: ids.map((e) => BigInt(e)),
+    //     });
+
+    //     const collections: Collection[] = [];
+    //     for (const collectionRes of res.collections) {
+    //         const collection = new Collection(this, collectionRes);
+    //         this.cachedCollections.set(collectionRes.id, collection);
+    //         collections.push(collection);
+    //     }
+
+    //     return collections;
+    // }
+
     async getObjectRaw(tableName: string, id: ObjectId) {
         const res = await this.fetchProto("GET", "/object", GetObjectRequestSchema, GetObjectResponseSchema, {
             id: BigInt(id),
@@ -606,9 +681,15 @@ export class CryptClient {
             return;
         }
 
-        const publicData = protoObjectToObject(res.object.publicData);
-        const privateData = nacl.secretbox.open(res.object.data, res.object.nonce, objectKey);
+        const privateDataBytes = nacl.secretbox.open(res.object.data, res.object.nonce, objectKey);
+        if (!privateDataBytes) {
+            console.error("Could not decrypt object data");
+            return;
+        }
 
+        const privateData = fromBinary(PrivateObjectDataSchema, privateDataBytes);
+
+        const publicData = protoObjectToObject(res.object.publicData);
         // TODO: verify private data
 
         return { publicData, privateData };

@@ -7,8 +7,8 @@ const client = new CryptClient("TestingApp", "http://localhost:8080");
 client.loginUsingPassword("stijnrogiest", "Vrijdag1@").then(async (v) => {
     console.log("logged in", v);
 
-    // const collection = await client.getCollection(client.personalCollectionId!);
-    // console.log("collection", collection);
+    const collection = await client.getCollection(client.personalCollectionId!);
+    console.log("collection", collection);
 
     // const key = await collection.getKey(collection.getNewestKeyVersion());
     // console.log("key", key);
@@ -16,12 +16,23 @@ client.loginUsingPassword("stijnrogiest", "Vrijdag1@").then(async (v) => {
     // const group = await client.getGroup(client.personalGroupId!);
     // console.log("group", group);
 
-    // const obj = await collection.createObjectRaw("Test", new Uint8Array(8), {
-    //     name: "stijn",
-    // });
-    const obj = await client.getObjectRaw("Test", 2n);
-
+    // const obj = await collection.createObjectRaw(
+    //     "Test",
+    //     {
+    //         name: "stijn",
+    //         age: 25,
+    //     },
+    //     {
+    //         type: "person",
+    //     }
+    // );
+    const obj = await client.getObjectRaw("Test", 4n);
     console.log("obj", obj);
+    const obj2 = await client.getObjectRaw("Test", 4n);
+    console.log(
+        "obj2",
+        JSON.stringify(obj2, (k, v) => (typeof v === "bigint" ? Number(v) : v))
+    );
 
     // const collection = await client.getCollection(v.personalCollectionId);
 });
