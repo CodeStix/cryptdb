@@ -100,6 +100,8 @@ message RegisterRequest {
         bytes public_key = 2                      [(buf.validate.field).bytes.len = 32]; // sign.publicKeyLength
         bytes client_server_signed_challenge = 3  [(buf.validate.field).bytes.len = 160]; // 32 + 64 + 64
         RegisterKeyMaterial keys = 4              [(buf.validate.field).required = true];
+        // bytes initial_group_state = 5;
+        // bytes initial_group_state_signature = 6;
     }
     
     // message PasswordRegisterRequest {

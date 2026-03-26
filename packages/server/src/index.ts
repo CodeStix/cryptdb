@@ -418,6 +418,17 @@ class CryptServer {
                 },
             });
 
+            // const groupLog = this.validateCreateGroupModification(
+            //     data.method.value!.initialGroupState,
+            //     data.method.value!.initialGroupStateSignature,
+            //     user.id,
+            //     keys.publicDataKey,
+            //     keys.publicSignKey
+            // );
+            // if (!groupLog || groupLog.event.case !== "created") {
+            //     throw new Error("Could not validate initial group log");
+            // }
+
             await prisma.groupUserKey.create({
                 data: {
                     version: 1,
@@ -1013,6 +1024,39 @@ class CryptServer {
         };
     }
 
+    private validateCreateGroupModification(
+        buffer: Uint8Array,
+        signature: Uint8Array,
+        userId: bigint,
+        userPublicKey: Uint8Array,
+        userPublicSignKey: Uint8Array
+    ) {
+        const initialLogItem = this.validateGroupModification(buffer);
+        if (!initialLogItem) {
+            return null;
+        }
+        if (initialLogItem.prevHash !== undefined) {
+            return null;
+        }
+        if (initialLogItem.sequence !== 1) {
+            return null;
+        }
+        if (initialLogItem.event.case !== "created") {
+            return null;
+        }
+
+        const initialLogItemData = initialLogItem.event.value;
+        if (initialLogItemData.creatorId !== userId || !nacl.verify(initialLogItemData.creatorPublicKey, userPublicKey)) {
+            return null;
+        }
+
+        if (!nacl.sign.detached.verify(buffer, signature, userPublicSignKey)) {
+            return null;
+        }
+
+        return initialLogItem.event.value;
+    }
+
     private async handleCreateGroup(
         url: URL,
         req: http.IncomingMessage,
@@ -1024,25 +1068,14 @@ class CryptServer {
 
         // TODO: verify wheter user can create group or not
 
-        if (!nacl.sign.detached.verify(data.initialLogItem, data.initialLogItemSignature, user.publicSignKey)) {
-            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
-        }
-
-        const initialLogItem = this.validateGroupModification(data.initialLogItem);
+        const initialLogItem = this.validateCreateGroupModification(
+            data.initialLogItem,
+            data.initialLogItemSignature,
+            user.id,
+            user.publicDataKey,
+            user.publicSignKey
+        );
         if (!initialLogItem) {
-            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
-        }
-        if (initialLogItem.prevHash !== undefined) {
-            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
-        }
-        if (initialLogItem.sequence !== 1) {
-            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
-        }
-        if (initialLogItem.event.case !== "created") {
-            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
-        }
-        const initialLogItemData = initialLogItem.event.value;
-        if (initialLogItemData.creatorId !== user.id || Buffer.compare(initialLogItemData.creatorPublicKey, user.publicDataKey) !== 0) {
             return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
         }
 
@@ -1054,7 +1087,7 @@ class CryptServer {
                     create: {
                         version: 1,
                         encryptedPrivateKey: data.encryptedPrivateKey as Uint8Array<ArrayBuffer>,
-                        publicKey: initialLogItemData.groupPublicKey as Uint8Array<ArrayBuffer>,
+                        publicKey: initialLogItem.groupPublicKey as Uint8Array<ArrayBuffer>,
                         userId: user.id,
                     },
                 },
@@ -1066,7 +1099,7 @@ class CryptServer {
                 },
                 log: {
                     create: {
-                        sequence: initialLogItem.sequence,
+                        sequence: 1,
                         payload: data.initialLogItem as Uint8Array<ArrayBuffer>,
                         signature: data.initialLogItemSignature as Uint8Array<ArrayBuffer>,
                         actingUserId: user.id,
@@ -1120,10 +1153,6 @@ class CryptServer {
             return createErrorMessage(ErrorCode.NO_GROUP_PERMISSION);
         }
 
-        if (!nacl.sign.detached.verify(data.modification, data.modificationSignature, user.publicSignKey)) {
-            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
-        }
-
         const modification = this.validateGroupModification(data.modification);
         if (!modification) {
             return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
@@ -1132,6 +1161,10 @@ class CryptServer {
             return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
         }
         if (modification.event.case === "created") {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+
+        if (!nacl.sign.detached.verify(data.modification, data.modificationSignature, user.publicSignKey)) {
             return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
         }
 

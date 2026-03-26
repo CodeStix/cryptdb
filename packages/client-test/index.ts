@@ -26,13 +26,14 @@ client.loginUsingPassword("stijnrogiest", "Vrijdag1@").then(async (v) => {
     //         type: "person",
     //     }
     // );
-    const obj = await client.getObjectRaw("Test", 4n);
-    console.log("obj", obj);
-    const obj2 = await client.getObjectRaw("Test", 4n);
-    console.log(
-        "obj2",
-        JSON.stringify(obj2, (k, v) => (typeof v === "bigint" ? Number(v) : v))
-    );
+
+    // const obj = await client.getObjectRaw("Test", 4n);
+    // console.log("obj", obj);
+    // const obj2 = await client.getObjectRaw("Test", 4n);
+    // console.log(
+    //     "obj2",
+    //     JSON.stringify(obj2, (k, v) => (typeof v === "bigint" ? Number(v) : v))
+    // );
 
     // const collection = await client.getCollection(v.personalCollectionId);
 });
