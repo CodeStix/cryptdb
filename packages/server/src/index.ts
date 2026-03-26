@@ -24,6 +24,11 @@ import {
     CreateObjectResponseSchema,
     protoObjectToObject,
     objectToProtoObject,
+    CreateGroupResponseSchema,
+    CreateGroupRequestSchema,
+    GroupLogEntryPayloadSchema,
+    ModifyGroupRequestSchema,
+    ModifyGroupResponseSchema,
 } from "cryptdb-client";
 import { GroupRole, PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -35,8 +40,8 @@ import nacl from "tweetnacl";
 import console, { timeStamp } from "console";
 import { createValidator } from "@bufbuild/protovalidate";
 import { DescMessage, fromBinary, create, MessageShape, MessageInitShape, toBinary } from "@bufbuild/protobuf";
-import { ToTuple } from "@prisma/client/runtime/client";
 import { decodeBase64 } from "tweetnacl-util";
+import { PrismaPromise } from "@prisma/client/runtime/client";
 
 const JWT_EXPIRE_IN = 18 * 60 * 60;
 const MAX_PRIVATE_DATA_LENGTH = 1000;
@@ -404,6 +409,8 @@ class CryptServer {
                 data: {
                     personalGroupId: group.id,
                     personalCollectionId: collection.id,
+                    publicSignKey: keys.publicSignKey as Uint8Array<ArrayBuffer>,
+                    publicDataKey: keys.publicDataKey as Uint8Array<ArrayBuffer>,
                 },
                 select: {
                     id: true,
@@ -414,7 +421,7 @@ class CryptServer {
             await prisma.groupUserKey.create({
                 data: {
                     version: 1,
-                    encryptedUsingKeyVersion: 1,
+                    // encryptedUsingKeyVersion: 1,
                     encryptedPrivateKey: keys.groupEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
                     publicKey: keys.groupPublicKey as Uint8Array<ArrayBuffer>,
                     groupId: group.id,
@@ -432,7 +439,7 @@ class CryptServer {
             await prisma.groupUserKey.create({
                 data: {
                     version: 1, // TODO: include public group key version
-                    encryptedUsingKeyVersion: 1,
+                    // encryptedUsingKeyVersion: 1,
                     encryptedPrivateKey: publicGroupEncryptedPrivateKey as Uint8Array<ArrayBuffer>,
                     publicKey: this.publicGroupKeyPair.publicKey as Uint8Array<ArrayBuffer>,
                     groupId: this.publicGroupId,
@@ -473,10 +480,9 @@ class CryptServer {
                 await prisma.userKey.create({
                     data: {
                         version: 1,
-                        publicSignKey: keys.publicSignKey as Uint8Array<ArrayBuffer>,
+
                         encryptedPrivateSignKey: keys.encryptedPrivateSignKey as Uint8Array<ArrayBuffer>,
                         encryptedPrivateSignKeyNonce: keys.encryptedPrivateSignKeyNonce as Uint8Array<ArrayBuffer>,
-                        publicDataKey: keys.publicDataKey as Uint8Array<ArrayBuffer>,
                         encryptedPrivateDataKey: keys.encryptedPrivateDataKey as Uint8Array<ArrayBuffer>,
                         encryptedPrivateDataKeyNonce: keys.encryptedPrivateDataKeyNonce as Uint8Array<ArrayBuffer>,
 
@@ -598,11 +604,11 @@ class CryptServer {
 
                     version: credential.version,
 
-                    publicSignKey: credential.publicSignKey,
+                    publicSignKey: credential.user.publicSignKey,
                     encryptedPrivateSignKey: credential.encryptedPrivateSignKey,
                     encryptedPrivateSignKeyNonce: credential.encryptedPrivateSignKeyNonce,
 
-                    publicDataKey: credential.publicDataKey,
+                    publicDataKey: credential.user.publicDataKey,
                     encryptedPrivateDataKey: credential.encryptedPrivateDataKey,
                     encryptedPrivateDataKeyNonce: credential.encryptedPrivateDataKeyNonce,
 
@@ -710,6 +716,7 @@ class CryptServer {
                 id: true,
                 name: true,
                 canCreateCollections: true,
+                log: true,
                 keys: {
                     where: {
                         userId: user.id,
@@ -717,7 +724,7 @@ class CryptServer {
                     select: {
                         userId: true,
                         version: true,
-                        encryptedUsingKeyVersion: true,
+                        // encryptedUsingKeyVersion: true,
                         encryptedPrivateKey: true,
                         publicKey: true,
                     },
@@ -749,7 +756,7 @@ class CryptServer {
                 })),
                 keys: group.keys.map((e) => ({
                     encryptedPrivateKey: e.encryptedPrivateKey,
-                    encryptedUsingKeyVersion: e.encryptedUsingKeyVersion,
+                    // encryptedUsingKeyVersion: e.encryptedUsingKeyVersion,
                     userId: e.userId,
                     publicKey: e.publicKey,
                     version: e.version,
@@ -1002,6 +1009,218 @@ class CryptServer {
                 value: {
                     id: object.id,
                 },
+            },
+        };
+    }
+
+    private async handleCreateGroup(
+        url: URL,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<MessageInitShape<typeof CreateGroupResponseSchema>> {
+        const user = await this.ensureUser(req, url);
+
+        const data = await this.parseBodyProtoValidated(url, req, CreateGroupRequestSchema);
+
+        // TODO: verify wheter user can create group or not
+
+        if (!nacl.sign.detached.verify(data.initialLogItem, data.initialLogItemSignature, user.publicSignKey)) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+
+        const initialLogItem = this.validateGroupModification(data.initialLogItem);
+        if (!initialLogItem) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+        if (initialLogItem.prevHash !== undefined) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+        if (initialLogItem.sequence !== 1) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+        if (initialLogItem.event.case !== "created") {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+        const initialLogItemData = initialLogItem.event.value;
+        if (initialLogItemData.creatorId !== user.id || Buffer.compare(initialLogItemData.creatorPublicKey, user.publicDataKey) !== 0) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+
+        const group = await this.prisma.group.create({
+            data: {
+                name: data.name,
+                canCreateCollections: false,
+                keys: {
+                    create: {
+                        version: 1,
+                        encryptedPrivateKey: data.encryptedPrivateKey as Uint8Array<ArrayBuffer>,
+                        publicKey: initialLogItemData.groupPublicKey as Uint8Array<ArrayBuffer>,
+                        userId: user.id,
+                    },
+                },
+                users: {
+                    create: {
+                        role: "Admin",
+                        userId: user.id,
+                    },
+                },
+                log: {
+                    create: {
+                        sequence: initialLogItem.sequence,
+                        payload: data.initialLogItem as Uint8Array<ArrayBuffer>,
+                        signature: data.initialLogItemSignature as Uint8Array<ArrayBuffer>,
+                        actingUserId: user.id,
+                    },
+                },
+            },
+        });
+
+        return {
+            response: {
+                case: "ok",
+                value: {
+                    id: group.id,
+                },
+            },
+        };
+    }
+
+    private validateGroupModification(buffer: Uint8Array) {
+        const msg = fromBinary(GroupLogEntryPayloadSchema, buffer);
+
+        const validator = createValidator();
+
+        const result = validator.validate(GroupLogEntryPayloadSchema, msg);
+        if (result.kind !== "valid") {
+            console.log("Validation failed", result);
+            return null;
+        }
+
+        return msg;
+    }
+
+    private async handleModifyGroup(
+        url: URL,
+        req: http.IncomingMessage,
+        res: http.ServerResponse
+    ): Promise<MessageInitShape<typeof ModifyGroupResponseSchema>> {
+        const user = await this.ensureUser(req, url);
+
+        const data = await this.parseBodyProtoValidated(url, req, ModifyGroupRequestSchema);
+
+        const permission = await this.prisma.groupUser.findUnique({
+            where: {
+                userId_groupId: {
+                    userId: user.id,
+                    groupId: data.groupId,
+                },
+            },
+        });
+        if (!permission || permission.role === "Reader") {
+            return createErrorMessage(ErrorCode.NO_GROUP_PERMISSION);
+        }
+
+        if (!nacl.sign.detached.verify(data.modification, data.modificationSignature, user.publicSignKey)) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+
+        const modification = this.validateGroupModification(data.modification);
+        if (!modification) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+        if (modification.prevHash === undefined) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+        if (modification.event.case === "created") {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+
+        const prevSequenceItem = await this.prisma.groupLogEntry.findFirst({
+            where: {
+                groupId: data.groupId,
+            },
+            orderBy: {
+                sequence: "desc",
+            },
+            take: 1,
+        });
+
+        if (!prevSequenceItem) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+        if (modification.sequence !== prevSequenceItem.sequence + 1) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+
+        const prevSequenceHash = nacl.hash(prevSequenceItem.payload);
+        if (nacl.verify(modification.prevHash, prevSequenceHash)) {
+            return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+        }
+
+        let promises: PrismaPromise<any>[] = [];
+
+        switch (modification.event.case) {
+            // case "created": {
+            //     return createErrorMessage(ErrorCode.INVALID_GROUP_MODIFICATION);
+            // }
+
+            case "keyRotated": {
+                // modification.event.value.newPublicKey;
+                break;
+            }
+
+            case "userAdded": {
+                promises.push(
+                    this.prisma.groupUser.create({
+                        data: {
+                            role: modification.event.value.role as GroupRole, // TODO: validate
+                            userId: modification.event.value.userId,
+                            groupId: data.groupId,
+                        },
+                    })
+                );
+                break;
+            }
+            case "userRemoved": {
+                promises.push(
+                    this.prisma.groupUser.delete({
+                        where: {
+                            userId_groupId: {
+                                userId: modification.event.value.userId,
+                                groupId: data.groupId,
+                            },
+                        },
+                    })
+                );
+                promises.push(
+                    this.prisma.groupUserKey.deleteMany({
+                        where: {
+                            groupId: data.groupId,
+                            userId: modification.event.value.userId,
+                        },
+                    })
+                );
+                break;
+            }
+        }
+
+        promises.push(
+            this.prisma.groupLogEntry.create({
+                data: {
+                    payload: data.modification as Uint8Array<ArrayBuffer>,
+                    signature: data.modificationSignature as Uint8Array<ArrayBuffer>,
+                    actingUserId: user.id,
+                    groupId: data.groupId,
+                },
+            })
+        );
+
+        await this.prisma.$transaction(promises);
+
+        return {
+            response: {
+                case: "ok",
+                value: {},
             },
         };
     }

@@ -23,11 +23,11 @@ model UserKey {
 
   // When method == "password"  -> the following keys are encrypted with password-derived key (different password than stored in keyData)
   // When method == "publickey" -> the following keys are encrypted with the keypair
-  version                      Int // Version of sign and data keys
-  publicSignKey                Bytes
+  version Int // Version of sign and data keys
+
   encryptedPrivateSignKey      Bytes
   encryptedPrivateSignKeyNonce Bytes
-  publicDataKey                Bytes
+
   encryptedPrivateDataKey      Bytes
   encryptedPrivateDataKeyNonce Bytes
 
@@ -44,9 +44,13 @@ model User {
 
   tokenCounter Int @default(0)
 
-  groups        GroupUser[]
-  userKeys      UserKey[]
-  groupUserKeys GroupUserKey[]
+  publicSignKey Bytes
+  publicDataKey Bytes
+
+  groups          GroupUser[]
+  userKeys        UserKey[]
+  groupUserKeys   GroupUserKey[]
+  groupLogEntries GroupLogEntry[]
 }
 
 model GroupUser {
@@ -73,10 +77,10 @@ model GroupUserKey {
   groupId BigInt
   group   Group  @relation(fields: [groupId], references: [id])
 
-  version                  Int
-  publicKey                Bytes // TODO: stored public key in shared model (is reused for a lot of GroupUserKey)
-  encryptedPrivateKey      Bytes // Encrypted using user public key
-  encryptedUsingKeyVersion Int // The private key is encrypted with this UserKey version
+  version             Int
+  publicKey           Bytes // TODO: stored public key in shared model (is reused for a lot of GroupUserKey)
+  encryptedPrivateKey Bytes // Encrypted using user public key
+  // encryptedUsingKeyVersion Int // User keypair cannot change
 
   @@id([userId, groupId, version])
 }
@@ -101,6 +105,7 @@ model Group {
 
   canCreateCollections Boolean @default(false)
 
+  log                 GroupLogEntry[]
   users               GroupUser[]
   collections         GroupCollection[]
   permissions         TablePermission[]
@@ -108,11 +113,24 @@ model Group {
   groupCollectionKeys GroupCollectionKey[]
 }
 
-// model GroupLogEntry {
-//   entryId 
-//   groupId BigInt 
-
+// enum GroupAction {
+//   Created
+//   KeyRotated
+//   UserAdded
+//   UserRemoved
 // }
+
+model GroupLogEntry {
+  sequence     Int    @default(autoincrement())
+  groupId      BigInt
+  group        Group  @relation(fields: [groupId], references: [id])
+  payload      Bytes
+  signature    Bytes
+  actingUserId BigInt
+  actingUser   User   @relation(fields: [actingUserId], references: [id])
+
+  @@id([sequence, groupId])
+}
 
 model GroupCollection {
   groupId      BigInt

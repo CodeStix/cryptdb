@@ -94,6 +94,50 @@ export class Group {
         this.data = res.group;
     }
 
+    async verify() {
+        type ServerGroupLogEntry = {
+            sequenceNumber: number;
+            payload:
+                | {
+                      type: "group-created";
+                      groupId: number;
+                      creatorId: number;
+                      creatorPublicKey: Uint8Array;
+                  }
+                | {
+                      type: "user-added";
+                      groupId: number;
+                      userId: number;
+                      publicKey: Uint8Array;
+                  }
+                | {
+                      type: "user-removed";
+                      groupId: number;
+                      userId: number;
+                  }
+                | {
+                      type: "rotate-key";
+                      groupId: number;
+                      newPublicKey: Uint8Array;
+                  };
+            prevHash: Uint8Array;
+            hash: Uint8Array; // hash(prevHash || payload || sequenceNumber)
+            signature: Uint8Array; // sign(hash)
+        };
+
+        type LocalGroupState = {
+            // Constructed from ServerGroupLogEntry[] blockchain (the whole chain is used)
+            groupState: {
+                id: number;
+                keyVersion: number;
+                publicKey: string;
+                members: { userId: number; publicKey: number; role: any }[];
+            };
+            lastThrustedStateNum: number;
+            lastThrustedStateHash: Uint8Array;
+        };
+    }
+
     async getKey(version: number): Promise<KeyPair | null> {
         const cachedKey = this.cachedKeys.get(version);
         if (cachedKey) {
@@ -106,11 +150,11 @@ export class Group {
             return null;
         }
 
-        let encryptedKey = this.data.keys.find((e) => e.version === version && e.encryptedUsingKeyVersion === userKeyPair.version);
+        let encryptedKey = this.data.keys.find((e) => e.version === version); //  && e.encryptedUsingKeyVersion === userKeyPair.version
         if (!encryptedKey) {
             await this.refresh();
 
-            encryptedKey = this.data.keys.find((e) => e.version === version && e.encryptedUsingKeyVersion === userKeyPair.version);
+            encryptedKey = this.data.keys.find((e) => e.version === version); //  && e.encryptedUsingKeyVersion === userKeyPair.version
             if (!encryptedKey) {
                 console.error("Key with version not found", version, userKeyPair.version, this.data.keys);
                 return null;

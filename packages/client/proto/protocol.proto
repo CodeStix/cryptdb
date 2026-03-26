@@ -13,6 +13,40 @@ message PrivateObjectData {
     repeated Collection collections = 2;
 }
 
+message GroupLogEntryPayload {
+    message Created {
+        uint64 creator_id = 1;
+        bytes creator_public_key = 2;
+        bytes group_public_key = 3; // initial public key
+    }
+
+    message KeyRotated {
+        bytes new_public_key = 1;
+    }
+
+    message UserAdded {
+        uint64 user_id = 1;
+        bytes user_public_key = 2;
+        string role = 3;
+    }
+
+    message UserRemoved {
+        uint64 user_id = 1;
+    }
+
+    int32 sequence = 1;
+    optional bytes prev_hash = 2;
+
+    oneof event {
+        Created created = 3;
+        KeyRotated key_rotated = 4;
+        UserAdded user_added = 5;
+        UserRemoved user_removed = 6;
+    }
+
+    
+}
+
 enum ErrorCode {
     UNSPECIFIED              = 0;
     OK                       = 1;
@@ -30,6 +64,7 @@ enum ErrorCode {
     PRIVATE_DATA_TOO_LARGE = 13;
     PUBLIC_DATA_TOO_LARGE = 14;
     PRIVATE_DATA_OUTDATED_KEY = 15;
+    INVALID_GROUP_MODIFICATION = 16;
 }
 
 message ErrorResponse {
@@ -199,7 +234,7 @@ message GroupResponse {
         uint32 version = 2;
         bytes public_key = 3;
         bytes encrypted_private_key = 4;
-        uint32 encrypted_using_key_version = 5;
+        // uint32 encrypted_using_key_version = 5;
     }
 
     uint64 id = 1;
@@ -271,5 +306,40 @@ message CreateObjectResponse {
     oneof response {
         ErrorResponse error = 1;
         CreateObjectOkResponse ok = 2;
+    }
+}
+
+message CreateGroupRequest {
+    bytes initial_log_item = 1;
+    bytes initial_log_item_signature = 2;
+    bytes encrypted_private_key = 3;
+    string name = 4;
+}
+
+message CreateGroupResponse {
+    message CreateGroupOkResponse {
+        uint64 id = 1;
+    }
+
+    oneof response {
+        ErrorResponse error = 1;
+        CreateGroupOkResponse ok = 2;
+    }
+}
+
+message ModifyGroupRequest {
+    uint64 group_id = 1;
+    bytes modification = 2;
+    bytes modification_signature = 3;
+}
+
+message ModifyGroupResponse {
+    message ModifyGroupOkResponse {
+        // uint64 id = 1;
+    }
+
+    oneof response {
+        ErrorResponse error = 1;
+        ModifyGroupOkResponse ok = 2;
     }
 }
