@@ -29,8 +29,9 @@ import {
     GroupLogEntryPayloadSchema,
     ModifyGroupRequestSchema,
     ModifyGroupResponseSchema,
+    UserGroupRole,
 } from "cryptdb-client";
-import { GroupRole, PrismaClient, User } from "../prisma/prisma/client";
+import { PrismaClient, User } from "../prisma/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import http from "http";
 import * as z from "zod";
@@ -443,7 +444,7 @@ class CryptServer {
                 data: {
                     groupId: group.id,
                     userId: user.id,
-                    role: "Reader", // Do not allow adding other users to personal group
+                    role: UserGroupRole.READER, // Do not allow adding other users to personal group
                 },
             });
 
@@ -461,7 +462,7 @@ class CryptServer {
                 data: {
                     userId: user.id,
                     groupId: this.publicGroupId,
-                    role: "Reader", // Do not allow adding other users to public group
+                    role: UserGroupRole.READER, // Do not allow adding other users to public group
                 },
             });
 
@@ -524,6 +525,7 @@ class CryptServer {
                     token: token,
                     personalCollectionId: collection.id,
                     personalGroupId: group.id,
+                    userId: user.id,
                 },
             },
         };
@@ -625,6 +627,8 @@ class CryptServer {
 
                     personalCollectionId: credential.user.personalCollectionId,
                     personalGroupId: credential.user.personalGroupId,
+
+                    userId: credential.user.id,
                 },
             },
         };
@@ -727,7 +731,11 @@ class CryptServer {
                 id: true,
                 name: true,
                 canCreateCollections: true,
-                log: true,
+                log: {
+                    orderBy: {
+                        sequence: "asc",
+                    },
+                },
                 keys: {
                     where: {
                         userId: user.id,
@@ -740,15 +748,15 @@ class CryptServer {
                         publicKey: true,
                     },
                 },
-                users: {
-                    where: {
-                        userId: user.id,
-                    },
-                    select: {
-                        userId: true,
-                        role: true,
-                    },
-                },
+                // users: {
+                //     where: {
+                //         userId: user.id,
+                //     },
+                //     select: {
+                //         userId: true,
+                //         role: true,
+                //     },
+                // },
             },
         });
 
@@ -761,16 +769,22 @@ class CryptServer {
                 id: group.id,
                 name: group.name,
                 canCreateCollections: group.canCreateCollections,
-                users: group.users.map((e) => ({
-                    role: e.role,
-                    userId: e.userId,
-                })),
+                // users: group.users.map((e) => ({
+                //     role: e.role,
+                //     userId: e.userId,
+                // })),
                 keys: group.keys.map((e) => ({
                     encryptedPrivateKey: e.encryptedPrivateKey,
                     // encryptedUsingKeyVersion: e.encryptedUsingKeyVersion,
                     userId: e.userId,
                     publicKey: e.publicKey,
                     version: e.version,
+                })),
+                logs: group.log.map((e) => ({
+                    actingUserId: e.actingUserId,
+                    logItem: e.payload,
+                    logItemSignature: e.signature,
+                    sequence: e.sequence,
                 })),
             },
         };
@@ -1093,7 +1107,7 @@ class CryptServer {
                 },
                 users: {
                     create: {
-                        role: "Admin",
+                        role: UserGroupRole.ADMIN,
                         userId: user.id,
                     },
                 },
@@ -1106,13 +1120,59 @@ class CryptServer {
                     },
                 },
             },
+            select: {
+                id: true,
+                name: true,
+                canCreateCollections: true,
+                log: {
+                    orderBy: {
+                        sequence: "asc",
+                    },
+                },
+                keys: {
+                    select: {
+                        userId: true,
+                        version: true,
+                        // encryptedUsingKeyVersion: true,
+                        encryptedPrivateKey: true,
+                        publicKey: true,
+                    },
+                },
+                // users: {
+                //     select: {
+                //         userId: true,
+                //         role: true,
+                //     },
+                // },
+            },
         });
 
         return {
             response: {
                 case: "ok",
                 value: {
-                    id: group.id,
+                    group: {
+                        id: group.id,
+                        name: group.name,
+                        canCreateCollections: group.canCreateCollections,
+                        // users: group.users.map((e) => ({
+                        //     role: e.role,
+                        //     userId: e.userId,
+                        // })),
+                        keys: group.keys.map((e) => ({
+                            encryptedPrivateKey: e.encryptedPrivateKey,
+                            // encryptedUsingKeyVersion: e.encryptedUsingKeyVersion,
+                            userId: e.userId,
+                            publicKey: e.publicKey,
+                            version: e.version,
+                        })),
+                        logs: group.log.map((e) => ({
+                            actingUserId: e.actingUserId,
+                            logItem: e.payload,
+                            logItemSignature: e.signature,
+                            sequence: e.sequence,
+                        })),
+                    },
                 },
             },
         };
@@ -1149,7 +1209,7 @@ class CryptServer {
                 },
             },
         });
-        if (!permission || permission.role === "Reader") {
+        if (!permission || permission.role === UserGroupRole.READER) {
             return createErrorMessage(ErrorCode.NO_GROUP_PERMISSION);
         }
 
@@ -1206,7 +1266,7 @@ class CryptServer {
                 promises.push(
                     this.prisma.groupUser.create({
                         data: {
-                            role: modification.event.value.role as GroupRole, // TODO: validate
+                            role: modification.event.value.role, // TODO: validate
                             userId: modification.event.value.userId,
                             groupId: data.groupId,
                         },

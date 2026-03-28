@@ -3,6 +3,11 @@ package auth;
 
 import "buf/validate/validate.proto";
 
+enum UserGroupRole {
+    READER = 0;
+    ADMIN = 2;
+}
+
 message PrivateObjectData {
     message Collection {
         uint64 collection_id = 1;
@@ -27,11 +32,16 @@ message GroupLogEntryPayload {
     message UserAdded {
         uint64 user_id = 1;
         bytes user_public_key = 2;
-        string role = 3;
+        UserGroupRole role = 3;
     }
 
     message UserRemoved {
         uint64 user_id = 1;
+    }
+
+    message UserModified {
+        uint64 user_id = 1;
+        UserGroupRole new_role = 2;
     }
 
     int32 sequence = 1;
@@ -42,6 +52,7 @@ message GroupLogEntryPayload {
         KeyRotated key_rotated = 4;
         UserAdded user_added = 5;
         UserRemoved user_removed = 6;
+        UserModified user_modified = 7;
     }
 
     
@@ -122,6 +133,7 @@ message RegisterResponse {
         string token = 1;   
         uint64 personal_collection_id = 2;
         uint64 personal_group_id = 3;
+        uint64 user_id = 4;
     }
 
     oneof response {
@@ -184,6 +196,7 @@ message LoginResponse {
 
         uint64 personal_collection_id = 10;
         uint64 personal_group_id = 11;
+        uint64 user_id = 12;
     }
 
     oneof response {
@@ -226,10 +239,10 @@ message GetCollectionResponse {
 }
 
 message GroupResponse {
-    message GroupUser {
-        uint64 user_id = 1;
-        string role = 2;
-    }
+    // message GroupUser {
+    //     uint64 user_id = 1;
+    //     UserGroupRole role = 2;
+    // }
 
     message Key {
         uint64 user_id = 1;
@@ -239,11 +252,19 @@ message GroupResponse {
         // uint32 encrypted_using_key_version = 5;
     }
 
+    message Log {
+        int32 sequence = 1;
+        bytes log_item = 2;
+        bytes log_item_signature = 3;
+        uint64 acting_user_id = 4;
+    }
+
     uint64 id = 1;
     string name = 2;
-    repeated GroupUser users = 3;
+    // repeated GroupUser users = 3;
     repeated Key keys = 4;
     bool can_create_collections = 5;
+    repeated Log logs = 6;
 }    
 
 message GetGroupRequest {
@@ -320,7 +341,7 @@ message CreateGroupRequest {
 
 message CreateGroupResponse {
     message CreateGroupOkResponse {
-        uint64 id = 1;
+        GroupResponse group = 1;
     }
 
     oneof response {

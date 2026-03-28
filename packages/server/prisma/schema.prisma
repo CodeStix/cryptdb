@@ -59,16 +59,16 @@ model GroupUser {
   groupId BigInt
   group   Group  @relation(fields: [groupId], references: [id])
 
-  role GroupRole
+  role Int
 
   @@id([userId, groupId])
 }
 
-enum GroupRole {
-  Reader
-  Moderator // Can add/remove users to the group, but not moderators
-  Admin // Can add/remove users, including moderators and delete the group
-}
+// enum GroupRole {
+//   Reader
+//   Moderator // Can add/remove users to the group, but not moderators
+//   Admin // Can add/remove users, including moderators and delete the group
+// }
 
 // Contains group public key and private key encrypted for user
 model GroupUserKey {

@@ -7,8 +7,8 @@ const client = new CryptClient("TestingApp", "http://localhost:8080");
 client.loginUsingPassword("stijnrogiest", "Vrijdag1@").then(async (v) => {
     console.log("logged in", v);
 
-    const collection = await client.getCollection(client.personalCollectionId!);
-    console.log("collection", collection);
+    // const collection = await client.getCollection(client.personalCollectionId!);
+    // console.log("collection", collection);
 
     // const key = await collection.getKey(collection.getNewestKeyVersion());
     // console.log("key", key);
