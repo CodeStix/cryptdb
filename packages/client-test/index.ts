@@ -13,8 +13,10 @@ client.loginUsingPassword("stijnrogiest", "Vrijdag1@").then(async (v) => {
     // const key = await collection.getKey(collection.getNewestKeyVersion());
     // console.log("key", key);
 
-    // const group = await client.getGroup(client.personalGroupId!);
-    // console.log("group", group);
+    const group = await client.getGroup(client.personalGroupId!);
+    console.log("group", group);
+
+    console.log("trusted", group?.verify());
 
     // const obj = await collection.createObjectRaw(
     //     "Test",

@@ -35,7 +35,7 @@ import {
 } from "./generated/protocol_pb";
 import { create, DescMessage, fromBinary, MessageInitShape, MessageShape, toBinary } from "@bufbuild/protobuf";
 import en from "zod/v4/locales/en.js";
-import { objectToProtoObject, protoObjectToObject } from "./util";
+import { isEqualBytes, objectToProtoObject, protoObjectToObject } from "./util";
 import { walk as canonicalJsonWalk } from "canonical-json";
 
 export * from "./types";
@@ -80,6 +80,7 @@ export class Group {
     private client: CryptClient;
     private data!: GroupResponse;
     private cachedKeys = new Map<number, KeyPair>();
+    private trustedState?: TrustedGroupState;
 
     constructor(client: CryptClient, data: GroupResponse) {
         this.client = client;
@@ -91,23 +92,26 @@ export class Group {
         return this.data.keys.some((e) => e.version === version);
     }
 
-    generateRoster() {
-        // this.data.
+    setTrustedState(state: TrustedGroupState) {
+        this.trustedState = state;
     }
 
-    // setData(data: GroupResponse) {
-    //     this.data = data;
-    // }
+    verify() {
+        let state = this.trustedState
+            ? {
+                  ...this.trustedState,
+                  users: { ...this.trustedState.users },
+              }
+            : null;
 
-    async verify() {
-        let trustedGroupState: TrustedGroupState | null = null; // TODO: load from disk & partially fetch logs (!IMPORTANT! deep copy first)
+        const logs = this.trustedState ? this.data.logs.filter((e) => e.sequence > this.trustedState!.sequence) : this.data.logs;
 
-        for (let i = 0; i < this.data.logs.length; i++) {
-            const log = this.data.logs[i]!;
+        for (let i = 0; i < logs.length; i++) {
+            const log = logs[i]!;
 
             let logItem: GroupLogEntryPayload;
 
-            if (trustedGroupState === null) {
+            if (!state) {
                 // TODO: (optional) ask if the client wants to trust createdData.creatorPublicKey as group admin
 
                 logItem = fromBinary(GroupLogEntryPayloadSchema, log.logItem);
@@ -122,7 +126,7 @@ export class Group {
                     throw new Error("Invalid signature on genesis entry");
                 }
 
-                trustedGroupState = {
+                state = {
                     sequence: 1,
                     hash: nacl.hash(log.logItem),
                     publicKey: createdData.groupPublicKey,
@@ -134,11 +138,11 @@ export class Group {
                     },
                 };
             } else {
-                if (log.sequence !== trustedGroupState.sequence + 1) {
-                    throw new Error("Expected log with sequence " + (trustedGroupState.sequence + 1) + " but got " + log.sequence);
+                if (log.sequence !== state.sequence + 1) {
+                    throw new Error("Expected log with sequence " + (state.sequence + 1) + " but got " + log.sequence);
                 }
 
-                const signedBy = trustedGroupState.users[String(log.actingUserId)];
+                const signedBy = state.users[String(log.actingUserId)];
                 if (!signedBy) {
                     throw new Error("Log item got signed by unknown user");
                 }
@@ -155,28 +159,28 @@ export class Group {
                 if (logItem.sequence !== log.sequence || logItem.prevHash === undefined) {
                     throw new Error("Log item sequence doesn't match signed");
                 }
-                if (logItem.prevHash === undefined || !nacl.verify(logItem.prevHash, trustedGroupState.hash)) {
+                if (logItem.prevHash === undefined || !isEqualBytes(logItem.prevHash, state.hash)) {
                     throw new Error("Previous log item doesn't match prev hash");
                 }
 
                 switch (logItem.event.case) {
                     case "keyRotated": {
-                        trustedGroupState.publicKey = logItem.event.value.newPublicKey;
+                        state.publicKey = logItem.event.value.newPublicKey;
                         break;
                     }
                     case "userAdded": {
-                        trustedGroupState.users[String(logItem.event.value.userId)] = {
+                        state.users[String(logItem.event.value.userId)] = {
                             publicKey: logItem.event.value.userPublicKey,
                             role: logItem.event.value.role,
                         };
                         break;
                     }
                     case "userRemoved": {
-                        delete trustedGroupState.users[String(logItem.event.value.userId)];
+                        delete state.users[String(logItem.event.value.userId)];
                         break;
                     }
                     case "userModified": {
-                        const existing = trustedGroupState.users[String(logItem.event.value.userId)];
+                        const existing = state.users[String(logItem.event.value.userId)];
                         if (!existing) {
                             throw new Error("Cannot modify unknown user");
                         }
@@ -193,12 +197,18 @@ export class Group {
                     }
                 }
 
-                trustedGroupState.sequence = logItem.sequence;
-                trustedGroupState.hash = nacl.hash(log.logItem);
+                state.sequence = logItem.sequence;
+                state.hash = nacl.hash(log.logItem);
             }
 
             // TODO: save trustedGroupState to disk
         }
+
+        if (state === null) {
+            throw new Error("Could not create trusted group state");
+        }
+
+        this.trustedState = state;
     }
 
     async refresh() {
@@ -747,6 +757,9 @@ export class CryptClient {
         const newGroup = new Group(this, res.group);
         this.cachedGroups.set(id, newGroup);
         await newGroup.refresh();
+
+        // if (res.group.keys[0]?.publicKey)
+
         return newGroup;
     }
 
@@ -798,8 +811,6 @@ export class CryptClient {
 
         return group;
     }
-
-    async fetchGroup() {}
 
     // async getCollections(ids: CollectionId[]) {
     //     const res = await this.fetchProto("GET", "/collection", GetCollectionRequestSchema, GetCollectionResponseSchema, {
